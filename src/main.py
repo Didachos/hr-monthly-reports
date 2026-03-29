@@ -9,7 +9,7 @@ def load_attendance(file_path: Path) -> pd.DataFrame:
     if not file_path.exists():
         raise FileNotFoundError(f"Δεν βρέθηκε το αρχείο: {file_path}")
 
-    # Κρατάμε το ΑΦΜ ως string από την αρχή για να μη χαθεί leading zero
+    # Κρατάμε το ΑΦΜ ως string για να μη χαθεί τυχόν leading zero
     df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -97,7 +97,7 @@ def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
 
     gr_holidays = get_greek_holidays(year)
 
-    # Μόνο εργάσιμες: Δευτέρα-Παρασκευή ΚΑΙ όχι επίσημη αργία
+    # Κρατάμε μόνο εργάσιμες: Δευτέρα-Παρασκευή και όχι αργίες
     full_calendar = full_calendar[
         (full_calendar["Ημ/νία"].dt.weekday < 5) &
         (~full_calendar["Ημ/νία"].isin(gr_holidays))
@@ -119,9 +119,43 @@ def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
     absences = result[result["παρουσία"].isna()].copy()
     absences["Κατάσταση"] = "ΑΠΩΝ"
 
-    return absences[
+    absences = absences[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία", "Κατάσταση"]
-    ].sort_values(["Επώνυμο", "Όνομα", "Ημ/νία"]).reset_index(drop=True)
+    ].sort_values(
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
+    ).reset_index(drop=True)
+
+    return absences
+
+
+def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    month_df = df[
+        (df["Ημ/νία"].dt.year == year) &
+        (df["Ημ/νία"].dt.month == month)
+    ].copy()
+
+    if month_df.empty:
+        raise ValueError(
+            f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
+        )
+
+    # 1 μέρα εργασίας = 1 μοναδική ημερομηνία παρουσίας ανά εργαζόμενο
+    unique_days = month_df[
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
+    ].drop_duplicates()
+
+    result = (
+        unique_days
+        .groupby(
+            ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"],
+            as_index=False
+        )
+        .agg(**{"Σύνολο Ημερών Εργασίας": ("Ημ/νία", "nunique")})
+        .sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ"])
+        .reset_index(drop=True)
+    )
+
+    return result
 
 
 def main() -> None:
@@ -136,7 +170,13 @@ def main() -> None:
 
     project_root = Path(__file__).resolve().parent.parent
     input_file = project_root / "data" / "input" / "raw_attendance.xlsx"
-    output_file = project_root / "data" / "output" / f"absences_{year}_{month:02d}.xlsx"
+
+    absences_output_file = (
+        project_root / "data" / "output" / f"absences_{year}_{month:02d}.xlsx"
+    )
+    workdays_output_file = (
+        project_root / "data" / "output" / f"workdays_{year}_{month:02d}.xlsx"
+    )
 
     df = load_attendance(input_file)
     df = clean_attendance(df)
@@ -152,16 +192,21 @@ def main() -> None:
     print("Αργίες μήνα:", [d.strftime("%d/%m/%Y") for d in month_holidays])
 
     absences = find_absences(df, year=year, month=month)
-
     absences["Ημ/νία"] = pd.to_datetime(absences["Ημ/νία"]).dt.strftime("%d/%m/%Y")
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    absences.to_excel(output_file, index=False)
+    workdays = calculate_work_days(df, year=year, month=month)
 
-    print(f"Το αρχείο δημιουργήθηκε: {output_file}")
+    absences_output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    absences.to_excel(absences_output_file, index=False)
+    workdays.to_excel(workdays_output_file, index=False)
+
+    print(f"Το αρχείο απουσιών δημιουργήθηκε: {absences_output_file}")
+    print(f"Το αρχείο ημερών εργασίας δημιουργήθηκε: {workdays_output_file}")
     print(f"Σύνολο γραμμών απουσίας: {len(absences)}")
     print()
-    print(absences.head(20).to_string(index=False))
+    print("Δείγμα ημερών εργασίας:")
+    print(workdays.head(20).to_string(index=False))
 
 
 if __name__ == "__main__":
