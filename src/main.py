@@ -5,11 +5,13 @@ import pandas as pd
 import holidays
 
 
+STANDARD_WORK_MINUTES = 8 * 60
+
+
 def load_attendance(file_path: Path) -> pd.DataFrame:
     if not file_path.exists():
         raise FileNotFoundError(f"Δεν βρέθηκε το αρχείο: {file_path}")
 
-    # Κρατάμε το ΑΦΜ ως string για να μη χαθεί τυχόν leading zero
     df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -38,7 +40,6 @@ def clean_attendance(df: pd.DataFrame) -> pd.DataFrame:
     df["Επώνυμο"] = df["Επώνυμο"].astype(str).str.strip()
     df["Όνομα"] = df["Όνομα"].astype(str).str.strip()
 
-    # Ρητά dayfirst=True γιατί το αρχείο είναι dd/mm/yyyy
     df["Ημ/νία"] = pd.to_datetime(
         df["Ημ/νία"],
         errors="coerce",
@@ -97,7 +98,6 @@ def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
 
     gr_holidays = get_greek_holidays(year)
 
-    # Κρατάμε μόνο εργάσιμες: Δευτέρα-Παρασκευή και όχι αργίες
     full_calendar = full_calendar[
         (full_calendar["Ημ/νία"].dt.weekday < 5) &
         (~full_calendar["Ημ/νία"].isin(gr_holidays))
@@ -139,7 +139,6 @@ def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame
             f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
         )
 
-    # 1 μέρα εργασίας = 1 μοναδική ημερομηνία παρουσίας ανά εργαζόμενο
     unique_days = month_df[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
     ].drop_duplicates()
@@ -156,6 +155,111 @@ def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame
     )
 
     return result
+
+
+def parse_time_to_minutes(value: str) -> float:
+    if pd.isna(value):
+        return float("nan")
+
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return float("nan")
+
+    parsed = pd.to_datetime(text, format="%H:%M", errors="coerce")
+    if pd.isna(parsed):
+        parsed = pd.to_datetime(text, errors="coerce")
+
+    if pd.isna(parsed):
+        return float("nan")
+
+    return parsed.hour * 60 + parsed.minute
+
+
+def minutes_to_hhmm(total_minutes: int) -> str:
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def calculate_overtime(df: pd.DataFrame, year: int, month: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    month_df = df[
+        (df["Ημ/νία"].dt.year == year) &
+        (df["Ημ/νία"].dt.month == month)
+    ].copy()
+
+    if month_df.empty:
+        raise ValueError(
+            f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
+        )
+
+    month_df["Λεπτά Από"] = month_df["Από"].apply(parse_time_to_minutes)
+    month_df["Λεπτά Έως"] = month_df["Έως"].apply(parse_time_to_minutes)
+
+    # Αν λείπουν ώρες, πετάμε τη γραμμή από τον υπολογισμό υπερωρίας
+    month_df = month_df.dropna(subset=["Λεπτά Από", "Λεπτά Έως"]).copy()
+
+    month_df["Λεπτά Από"] = month_df["Λεπτά Από"].astype(int)
+    month_df["Λεπτά Έως"] = month_df["Λεπτά Έως"].astype(int)
+
+    month_df["Συνολικά Λεπτά Εργασίας"] = month_df["Λεπτά Έως"] - month_df["Λεπτά Από"]
+
+    # Αν η βάρδια περνάει τα μεσάνυχτα
+    month_df.loc[
+        month_df["Συνολικά Λεπτά Εργασίας"] < 0,
+        "Συνολικά Λεπτά Εργασίας"
+    ] += 24 * 60
+
+    month_df["Υπερωρία Λεπτά"] = (
+        month_df["Συνολικά Λεπτά Εργασίας"] - STANDARD_WORK_MINUTES
+    ).clip(lower=0)
+
+    month_df["Κατάσταση"] = month_df["Υπερωρία Λεπτά"].apply(
+        lambda x: "ΥΠΕΡΩΡΙΑ" if x > 0 else ""
+    )
+
+    month_df["Συνολική Διάρκεια"] = month_df["Συνολικά Λεπτά Εργασίας"].apply(minutes_to_hhmm)
+    month_df["Υπερωρία (HH:MM)"] = month_df["Υπερωρία Λεπτά"].apply(minutes_to_hhmm)
+
+    detailed = month_df[
+        [
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "Επώνυμο",
+            "Όνομα",
+            "Ημ/νία",
+            "Από",
+            "Έως",
+            "Συνολική Διάρκεια",
+            "Κατάσταση",
+            "Υπερωρία Λεπτά",
+            "Υπερωρία (HH:MM)",
+        ]
+    ].copy()
+
+    detailed["Ημ/νία"] = pd.to_datetime(detailed["Ημ/νία"]).dt.strftime("%d/%m/%Y")
+
+    detailed = detailed.sort_values(
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
+    ).reset_index(drop=True)
+
+    summary = (
+        month_df.groupby(
+            ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"],
+            as_index=False
+        )
+        .agg(
+            **{
+                "Ημέρες με Υπερωρία": ("Υπερωρία Λεπτά", lambda s: int((s > 0).sum())),
+                "Σύνολο Υπερωρίας Λεπτά": ("Υπερωρία Λεπτά", "sum"),
+            }
+        )
+        .sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ"])
+        .reset_index(drop=True)
+    )
+
+    summary["Σύνολο Υπερωρίας (HH:MM)"] = summary["Σύνολο Υπερωρίας Λεπτά"].apply(minutes_to_hhmm)
+
+    return detailed, summary
 
 
 def main() -> None:
@@ -177,6 +281,9 @@ def main() -> None:
     workdays_output_file = (
         project_root / "data" / "output" / f"workdays_{year}_{month:02d}.xlsx"
     )
+    overtime_output_file = (
+        project_root / "data" / "output" / f"overtime_{year}_{month:02d}.xlsx"
+    )
 
     df = load_attendance(input_file)
     df = clean_attendance(df)
@@ -196,17 +303,24 @@ def main() -> None:
 
     workdays = calculate_work_days(df, year=year, month=month)
 
+    overtime_detailed, overtime_summary = calculate_overtime(df, year=year, month=month)
+
     absences_output_file.parent.mkdir(parents=True, exist_ok=True)
 
     absences.to_excel(absences_output_file, index=False)
     workdays.to_excel(workdays_output_file, index=False)
 
+    with pd.ExcelWriter(overtime_output_file, engine="openpyxl") as writer:
+        overtime_detailed.to_excel(writer, sheet_name="Αναλυτικά", index=False)
+        overtime_summary.to_excel(writer, sheet_name="Σύνολα", index=False)
+
     print(f"Το αρχείο απουσιών δημιουργήθηκε: {absences_output_file}")
     print(f"Το αρχείο ημερών εργασίας δημιουργήθηκε: {workdays_output_file}")
+    print(f"Το αρχείο υπερωριών δημιουργήθηκε: {overtime_output_file}")
     print(f"Σύνολο γραμμών απουσίας: {len(absences)}")
     print()
-    print("Δείγμα ημερών εργασίας:")
-    print(workdays.head(20).to_string(index=False))
+    print("Δείγμα υπερωριών:")
+    print(overtime_summary.head(20).to_string(index=False))
 
 
 if __name__ == "__main__":
