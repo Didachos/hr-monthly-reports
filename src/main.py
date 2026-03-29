@@ -72,8 +72,6 @@ def get_greek_holidays(year: int) -> set[pd.Timestamp]:
 
 
 def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
-    df = df.copy()
-
     month_df = df[
         (df["Ημ/νία"].dt.year == year) &
         (df["Ημ/νία"].dt.month == month)
@@ -103,11 +101,7 @@ def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
         (~full_calendar["Ημ/νία"].isin(gr_holidays))
     ].copy()
 
-    presences = (
-        month_df[["ΑΦΜ", "Ημ/νία"]]
-        .drop_duplicates()
-        .copy()
-    )
+    presences = month_df[["ΑΦΜ", "Ημ/νία"]].drop_duplicates().copy()
     presences["παρουσία"] = 1
 
     result = full_calendar.merge(
@@ -124,6 +118,8 @@ def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
     ].sort_values(
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
     ).reset_index(drop=True)
+
+    absences["Ημ/νία"] = pd.to_datetime(absences["Ημ/νία"]).dt.strftime("%d/%m/%Y")
 
     return absences
 
@@ -195,7 +191,6 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int) -> tuple[pd.Data
     month_df["Λεπτά Από"] = month_df["Από"].apply(parse_time_to_minutes)
     month_df["Λεπτά Έως"] = month_df["Έως"].apply(parse_time_to_minutes)
 
-    # Αν λείπουν ώρες, πετάμε τη γραμμή από τον υπολογισμό υπερωρίας
     month_df = month_df.dropna(subset=["Λεπτά Από", "Λεπτά Έως"]).copy()
 
     month_df["Λεπτά Από"] = month_df["Λεπτά Από"].astype(int)
@@ -203,7 +198,6 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int) -> tuple[pd.Data
 
     month_df["Συνολικά Λεπτά Εργασίας"] = month_df["Λεπτά Έως"] - month_df["Λεπτά Από"]
 
-    # Αν η βάρδια περνάει τα μεσάνυχτα
     month_df.loc[
         month_df["Συνολικά Λεπτά Εργασίας"] < 0,
         "Συνολικά Λεπτά Εργασίας"
@@ -262,6 +256,21 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int) -> tuple[pd.Data
     return detailed, summary
 
 
+def autofit_worksheet_columns(worksheet) -> None:
+    for column_cells in worksheet.columns:
+        max_length = 0
+        column_letter = column_cells[0].column_letter
+
+        for cell in column_cells:
+            try:
+                cell_value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(cell_value))
+            except Exception:
+                pass
+
+        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 40)
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         raise ValueError("Χρήση: python src/main.py <year> <month>")
@@ -274,15 +283,8 @@ def main() -> None:
 
     project_root = Path(__file__).resolve().parent.parent
     input_file = project_root / "data" / "input" / "raw_attendance.xlsx"
-
-    absences_output_file = (
-        project_root / "data" / "output" / f"absences_{year}_{month:02d}.xlsx"
-    )
-    workdays_output_file = (
-        project_root / "data" / "output" / f"workdays_{year}_{month:02d}.xlsx"
-    )
-    overtime_output_file = (
-        project_root / "data" / "output" / f"overtime_{year}_{month:02d}.xlsx"
+    monthly_output_file = (
+        project_root / "data" / "output" / f"monthly_report_{year}_{month:02d}.xlsx"
     )
 
     df = load_attendance(input_file)
@@ -299,28 +301,28 @@ def main() -> None:
     print("Αργίες μήνα:", [d.strftime("%d/%m/%Y") for d in month_holidays])
 
     absences = find_absences(df, year=year, month=month)
-    absences["Ημ/νία"] = pd.to_datetime(absences["Ημ/νία"]).dt.strftime("%d/%m/%Y")
-
     workdays = calculate_work_days(df, year=year, month=month)
-
     overtime_detailed, overtime_summary = calculate_overtime(df, year=year, month=month)
 
-    absences_output_file.parent.mkdir(parents=True, exist_ok=True)
+    monthly_output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    absences.to_excel(absences_output_file, index=False)
-    workdays.to_excel(workdays_output_file, index=False)
+    with pd.ExcelWriter(monthly_output_file, engine="openpyxl") as writer:
+        absences.to_excel(writer, sheet_name="Απουσίες", index=False)
+        workdays.to_excel(writer, sheet_name="Ημέρες Εργασίας", index=False)
+        overtime_detailed.to_excel(writer, sheet_name="Υπερωρίες Αναλυτικά", index=False)
+        overtime_summary.to_excel(writer, sheet_name="Υπερωρίες Σύνολα", index=False)
 
-    with pd.ExcelWriter(overtime_output_file, engine="openpyxl") as writer:
-        overtime_detailed.to_excel(writer, sheet_name="Αναλυτικά", index=False)
-        overtime_summary.to_excel(writer, sheet_name="Σύνολα", index=False)
+        for sheet_name in writer.sheets:
+            worksheet = writer.sheets[sheet_name]
+            autofit_worksheet_columns(worksheet)
 
-    print(f"Το αρχείο απουσιών δημιουργήθηκε: {absences_output_file}")
-    print(f"Το αρχείο ημερών εργασίας δημιουργήθηκε: {workdays_output_file}")
-    print(f"Το αρχείο υπερωριών δημιουργήθηκε: {overtime_output_file}")
-    print(f"Σύνολο γραμμών απουσίας: {len(absences)}")
+    print(f"Το μηνιαίο αρχείο δημιουργήθηκε: {monthly_output_file}")
     print()
-    print("Δείγμα υπερωριών:")
-    print(overtime_summary.head(20).to_string(index=False))
+    print("Περιεχόμενα sheets:")
+    print("- Απουσίες")
+    print("- Ημέρες Εργασίας")
+    print("- Υπερωρίες Αναλυτικά")
+    print("- Υπερωρίες Σύνολα")
 
 
 if __name__ == "__main__":
