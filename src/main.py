@@ -7,10 +7,75 @@ import holidays
 
 STANDARD_WORK_MINUTES = 8 * 60
 
+VALID_ABSENCE_TYPES = {
+    "Κανονική άδεια",
+    "Άδεια ασθενείας",
+    "Άνευ αποδοχών άδεια",
+}
+
+
+# =========================
+# HELPERS
+# =========================
+
+def force_text_column(worksheet, header_name: str) -> None:
+    target_col_idx = None
+
+    for cell in worksheet[1]:
+        if cell.value == header_name:
+            target_col_idx = cell.column
+            break
+
+    if target_col_idx is None:
+        return
+
+    for row in worksheet.iter_rows(
+        min_row=2,
+        min_col=target_col_idx,
+        max_col=target_col_idx
+    ):
+        cell = row[0]
+        if cell.value is not None:
+            cell.value = str(cell.value)
+            cell.number_format = "@"
+
+
+def safe_str_series(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.strip()
+
+
+def minutes_to_hhmm(minutes: int) -> str:
+    minutes = int(minutes)
+    h = minutes // 60
+    m = minutes % 60
+    return f"{h:02d}:{m:02d}"
+
+
+def to_minutes(value):
+    if pd.isna(value):
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+
+    parsed = pd.to_datetime(text, format="%H:%M", errors="coerce")
+    if pd.isna(parsed):
+        parsed = pd.to_datetime(text, errors="coerce")
+
+    if pd.isna(parsed):
+        return None
+
+    return parsed.hour * 60 + parsed.minute
+
+
+# =========================
+# LOADERS
+# =========================
 
 def load_attendance(file_path: Path) -> pd.DataFrame:
     if not file_path.exists():
-        raise FileNotFoundError(f"Δεν βρέθηκε το αρχείο: {file_path}")
+        raise FileNotFoundError(f"Δεν βρέθηκε το raw αρχείο: {file_path}")
 
     df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
     df.columns = [str(c).strip() for c in df.columns]
@@ -32,97 +97,246 @@ def load_attendance(file_path: Path) -> pd.DataFrame:
     return df
 
 
+def load_employees(file_path: Path) -> pd.DataFrame:
+    if not file_path.exists():
+        raise FileNotFoundError(f"Δεν βρέθηκε το employees.xlsx: {file_path}")
+
+    df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
+    df.columns = [str(c).strip() for c in df.columns]
+
+    required_columns = [
+        "ΑΑ Παραρτηματος",
+        "ΑΦΜ",
+        "Επώνυμο",
+        "Όνομα",
+        "Ημερομηνία Πρόσληψης",
+        "Ημερομηνία Αποχώρησης",
+        "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους",
+        "Υπόλοιπο Προηγούμενου Έτους",
+        "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους",
+    ]
+
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        raise ValueError(f"Λείπουν στήλες από το employees.xlsx: {missing}")
+
+    df["ΑΑ Παραρτηματος"] = pd.to_numeric(df["ΑΑ Παραρτηματος"], errors="coerce")
+    df["ΑΦΜ"] = safe_str_series(df["ΑΦΜ"])
+    df["Επώνυμο"] = safe_str_series(df["Επώνυμο"])
+    df["Όνομα"] = safe_str_series(df["Όνομα"])
+
+    df["Ημερομηνία Πρόσληψης"] = pd.to_datetime(
+        df["Ημερομηνία Πρόσληψης"],
+        dayfirst=True,
+        errors="coerce"
+    ).dt.normalize()
+
+    df["Ημερομηνία Αποχώρησης"] = pd.to_datetime(
+        df["Ημερομηνία Αποχώρησης"],
+        dayfirst=True,
+        errors="coerce"
+    ).dt.normalize()
+
+    df["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"] = pd.to_numeric(
+        df["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    df["Υπόλοιπο Προηγούμενου Έτους"] = pd.to_numeric(
+        df["Υπόλοιπο Προηγούμενου Έτους"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    df["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] = pd.to_numeric(
+        df["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    if df["Ημερομηνία Πρόσληψης"].isna().any():
+        missing_afm = df.loc[df["Ημερομηνία Πρόσληψης"].isna(), "ΑΦΜ"].tolist()
+        raise ValueError(
+            f"Υπάρχουν εργαζόμενοι χωρίς Ημερομηνία Πρόσληψης: {missing_afm}"
+        )
+
+    return df.drop_duplicates().reset_index(drop=True)
+
+
+def load_classified_absences(file_path: Path) -> pd.DataFrame:
+    if not file_path.exists():
+        return pd.DataFrame()
+
+    df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
+    df.columns = [str(c).strip() for c in df.columns]
+
+    required_columns = [
+        "ΑΑ Παραρτηματος",
+        "ΑΦΜ",
+        "Επώνυμο",
+        "Όνομα",
+        "Ημ/νία",
+        "Τύπος Απουσίας",
+        "Έτος Άδειας",
+    ]
+
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Λείπουν στήλες από το classified_absences αρχείο: {missing}"
+        )
+
+    df["ΑΑ Παραρτηματος"] = pd.to_numeric(df["ΑΑ Παραρτηματος"], errors="coerce")
+    df["ΑΦΜ"] = safe_str_series(df["ΑΦΜ"])
+    df["Επώνυμο"] = safe_str_series(df["Επώνυμο"])
+    df["Όνομα"] = safe_str_series(df["Όνομα"])
+    df["Ημ/νία"] = pd.to_datetime(
+        df["Ημ/νία"], dayfirst=True, errors="coerce"
+    ).dt.normalize()
+
+    df["Τύπος Απουσίας"] = df["Τύπος Απουσίας"].fillna("").astype(str).str.strip()
+    df["Έτος Άδειας"] = pd.to_numeric(df["Έτος Άδειας"], errors="coerce")
+
+    df = df.dropna(subset=["ΑΦΜ", "Ημ/νία"]).copy()
+
+    filled = df[df["Τύπος Απουσίας"] != ""].copy()
+
+    invalid_types = sorted(set(filled["Τύπος Απουσίας"]) - VALID_ABSENCE_TYPES)
+    if invalid_types:
+        raise ValueError(
+            f"Μη αποδεκτοί τύποι απουσίας: {invalid_types}. "
+            f"Επιτρεπτές τιμές: {sorted(VALID_ABSENCE_TYPES)}"
+        )
+
+    annual_leave_missing_year = filled[
+        (filled["Τύπος Απουσίας"] == "Κανονική άδεια") &
+        (filled["Έτος Άδειας"].isna())
+    ]
+    if not annual_leave_missing_year.empty:
+        raise ValueError(
+            "Υπάρχουν γραμμές με 'Κανονική άδεια' χωρίς συμπληρωμένο 'Έτος Άδειας'."
+        )
+
+    filled.loc[
+        filled["Τύπος Απουσίας"] != "Κανονική άδεια",
+        "Έτος Άδειας"
+    ] = pd.NA
+
+    return filled.drop_duplicates().reset_index(drop=True)
+
+
+# =========================
+# CLEAN
+# =========================
+
 def clean_attendance(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     df["ΑΑ Παραρτηματος"] = pd.to_numeric(df["ΑΑ Παραρτηματος"], errors="coerce")
-    df["ΑΦΜ"] = df["ΑΦΜ"].astype(str).str.strip()
-    df["Επώνυμο"] = df["Επώνυμο"].astype(str).str.strip()
-    df["Όνομα"] = df["Όνομα"].astype(str).str.strip()
-
+    df["ΑΦΜ"] = safe_str_series(df["ΑΦΜ"])
+    df["Επώνυμο"] = safe_str_series(df["Επώνυμο"])
+    df["Όνομα"] = safe_str_series(df["Όνομα"])
     df["Ημ/νία"] = pd.to_datetime(
-        df["Ημ/νία"],
-        errors="coerce",
-        dayfirst=True
+        df["Ημ/νία"], dayfirst=True, errors="coerce"
     ).dt.normalize()
-
     df["Από"] = df["Από"].astype(str).str.strip()
     df["Έως"] = df["Έως"].astype(str).str.strip()
 
-    df = df.dropna(subset=["Ημ/νία", "ΑΦΜ"])
+    df = df.dropna(subset=["ΑΦΜ", "Ημ/νία"])
     df = df.drop_duplicates()
 
     return df
 
 
-def build_month_dates(year: int, month: int) -> pd.DataFrame:
-    last_day = monthrange(year, month)[1]
-    dates = pd.date_range(
+# =========================
+# ABSENCES
+# =========================
+
+def build_month_dates(year: int, month: int):
+    last = monthrange(year, month)[1]
+    return pd.date_range(
         start=f"{year}-{month:02d}-01",
-        end=f"{year}-{month:02d}-{last_day:02d}",
-        freq="D",
+        end=f"{year}-{month:02d}-{last:02d}",
+        freq="D"
     ).normalize()
 
-    return pd.DataFrame({"Ημ/νία": dates})
+
+def get_holidays(year: int):
+    return {
+        pd.Timestamp(d).normalize()
+        for d in holidays.country_holidays("GR", years=year).keys()
+    }
 
 
-def get_greek_holidays(year: int) -> set[pd.Timestamp]:
-    gr_holidays = holidays.country_holidays("GR", years=year)
-    return {pd.Timestamp(d).normalize() for d in gr_holidays.keys()}
-
-
-def find_absences(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+def find_absences(
+    df: pd.DataFrame,
+    employees: pd.DataFrame,
+    year: int,
+    month: int
+) -> pd.DataFrame:
     month_df = df[
         (df["Ημ/νία"].dt.year == year) &
         (df["Ημ/νία"].dt.month == month)
     ].copy()
 
-    if month_df.empty:
-        raise ValueError(
-            f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
-        )
+    employees_unique = employees[
+        [
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "Επώνυμο",
+            "Όνομα",
+            "Ημερομηνία Πρόσληψης",
+            "Ημερομηνία Αποχώρησης",
+        ]
+    ].drop_duplicates()
 
-    employees = (
-        month_df[["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"]]
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
+    dates = build_month_dates(year, month)
 
-    dates_df = build_month_dates(year, month)
+    full = employees_unique.assign(key=1).merge(
+        pd.DataFrame({"Ημ/νία": dates, "key": 1}),
+        on="key"
+    ).drop(columns="key")
 
-    employees["key"] = 1
-    dates_df["key"] = 1
-    full_calendar = employees.merge(dates_df, on="key").drop(columns="key")
+    holidays_set = get_holidays(year)
 
-    gr_holidays = get_greek_holidays(year)
-
-    full_calendar = full_calendar[
-        (full_calendar["Ημ/νία"].dt.weekday < 5) &
-        (~full_calendar["Ημ/νία"].isin(gr_holidays))
+    full = full[
+        (full["Ημ/νία"].dt.weekday < 5) &
+        (~full["Ημ/νία"].isin(holidays_set))
     ].copy()
 
-    presences = month_df[["ΑΦΜ", "Ημ/νία"]].drop_duplicates().copy()
-    presences["παρουσία"] = 1
+    full = full[full["Ημ/νία"] >= full["Ημερομηνία Πρόσληψης"]]
+    full = full[
+        full["Ημερομηνία Αποχώρησης"].isna() |
+        (full["Ημ/νία"] <= full["Ημερομηνία Αποχώρησης"])
+    ]
 
-    result = full_calendar.merge(
-        presences,
-        on=["ΑΦΜ", "Ημ/νία"],
-        how="left"
-    )
+    present = month_df[["ΑΦΜ", "Ημ/νία"]].drop_duplicates()
+    present["present"] = 1
 
-    absences = result[result["παρουσία"].isna()].copy()
+    merged = full.merge(present, on=["ΑΦΜ", "Ημ/νία"], how="left")
+
+    absences = merged[merged["present"].isna()].copy()
     absences["Κατάσταση"] = "ΑΠΩΝ"
-
-    absences = absences[
-        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία", "Κατάσταση"]
-    ].sort_values(
-        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
-    ).reset_index(drop=True)
-
     absences["Ημ/νία"] = pd.to_datetime(absences["Ημ/νία"]).dt.strftime("%d/%m/%Y")
 
-    return absences
+    result = absences[
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία", "Κατάσταση"]
+    ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]).reset_index(drop=True)
 
+    result["ΑΦΜ"] = result["ΑΦΜ"].astype(str)
+    return result
+
+
+def build_classified_absence_template(absences: pd.DataFrame) -> pd.DataFrame:
+    template = absences[
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
+    ].copy()
+
+    template["Τύπος Απουσίας"] = ""
+    template["Έτος Άδειας"] = ""
+    template["ΑΦΜ"] = template["ΑΦΜ"].astype(str)
+
+    return template
+
+
+# =========================
+# WORK DAYS
+# =========================
 
 def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
     month_df = df[
@@ -130,18 +344,12 @@ def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame
         (df["Ημ/νία"].dt.month == month)
     ].copy()
 
-    if month_df.empty:
-        raise ValueError(
-            f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
-        )
-
-    unique_days = month_df[
+    unique = month_df[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
     ].drop_duplicates()
 
     result = (
-        unique_days
-        .groupby(
+        unique.groupby(
             ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"],
             as_index=False
         )
@@ -150,179 +358,216 @@ def calculate_work_days(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame
         .reset_index(drop=True)
     )
 
+    result["ΑΦΜ"] = result["ΑΦΜ"].astype(str)
     return result
 
 
-def parse_time_to_minutes(value: str) -> float:
-    if pd.isna(value):
-        return float("nan")
+# =========================
+# OVERTIME
+# =========================
 
-    text = str(value).strip()
-    if not text or text.lower() == "nan":
-        return float("nan")
-
-    parsed = pd.to_datetime(text, format="%H:%M", errors="coerce")
-    if pd.isna(parsed):
-        parsed = pd.to_datetime(text, errors="coerce")
-
-    if pd.isna(parsed):
-        return float("nan")
-
-    return parsed.hour * 60 + parsed.minute
-
-
-def minutes_to_hhmm(total_minutes: int) -> str:
-    hours = total_minutes // 60
-    minutes = total_minutes % 60
-    return f"{hours:02d}:{minutes:02d}"
-
-
-def calculate_overtime(df: pd.DataFrame, year: int, month: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def calculate_overtime(df: pd.DataFrame, year: int, month: int):
     month_df = df[
         (df["Ημ/νία"].dt.year == year) &
         (df["Ημ/νία"].dt.month == month)
     ].copy()
 
-    if month_df.empty:
-        raise ValueError(
-            f"Δεν βρέθηκαν δεδομένα για {month:02d}/{year} στο raw αρχείο."
-        )
+    month_df["start"] = month_df["Από"].apply(to_minutes)
+    month_df["end"] = month_df["Έως"].apply(to_minutes)
 
-    month_df["Λεπτά Από"] = month_df["Από"].apply(parse_time_to_minutes)
-    month_df["Λεπτά Έως"] = month_df["Έως"].apply(parse_time_to_minutes)
+    month_df = month_df.dropna(subset=["start", "end"]).copy()
 
-    month_df = month_df.dropna(subset=["Λεπτά Από", "Λεπτά Έως"]).copy()
-
-    month_df["Λεπτά Από"] = month_df["Λεπτά Από"].astype(int)
-    month_df["Λεπτά Έως"] = month_df["Λεπτά Έως"].astype(int)
-
-    month_df["Συνολικά Λεπτά Εργασίας"] = month_df["Λεπτά Έως"] - month_df["Λεπτά Από"]
-
-    month_df.loc[
-        month_df["Συνολικά Λεπτά Εργασίας"] < 0,
-        "Συνολικά Λεπτά Εργασίας"
-    ] += 24 * 60
+    month_df["worked"] = month_df["end"] - month_df["start"]
+    month_df.loc[month_df["worked"] < 0, "worked"] += 1440
 
     month_df["Υπερωρία Λεπτά"] = (
-        month_df["Συνολικά Λεπτά Εργασίας"] - STANDARD_WORK_MINUTES
+        month_df["worked"] - STANDARD_WORK_MINUTES
     ).clip(lower=0)
 
-    month_df["Κατάσταση"] = month_df["Υπερωρία Λεπτά"].apply(
-        lambda x: "ΥΠΕΡΩΡΙΑ" if x > 0 else ""
+    month_df["Υπερωρία"] = month_df["Υπερωρία Λεπτά"].apply(
+        lambda x: "ΝΑΙ" if x > 0 else ""
     )
-
-    month_df["Συνολική Διάρκεια"] = month_df["Συνολικά Λεπτά Εργασίας"].apply(minutes_to_hhmm)
+    month_df["Συνολική Διάρκεια"] = month_df["worked"].apply(minutes_to_hhmm)
     month_df["Υπερωρία (HH:MM)"] = month_df["Υπερωρία Λεπτά"].apply(minutes_to_hhmm)
 
     detailed = month_df[
         [
-            "ΑΑ Παραρτηματος",
-            "ΑΦΜ",
-            "Επώνυμο",
-            "Όνομα",
-            "Ημ/νία",
-            "Από",
-            "Έως",
-            "Συνολική Διάρκεια",
-            "Κατάσταση",
-            "Υπερωρία Λεπτά",
-            "Υπερωρία (HH:MM)",
+            "ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία",
+            "Από", "Έως", "Συνολική Διάρκεια", "Υπερωρία",
+            "Υπερωρία Λεπτά", "Υπερωρία (HH:MM)"
         ]
     ].copy()
 
     detailed["Ημ/νία"] = pd.to_datetime(detailed["Ημ/νία"]).dt.strftime("%d/%m/%Y")
-
     detailed = detailed.sort_values(
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
     ).reset_index(drop=True)
+    detailed["ΑΦΜ"] = detailed["ΑΦΜ"].astype(str)
 
     summary = (
         month_df.groupby(
             ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"],
             as_index=False
         )
-        .agg(
-            **{
-                "Ημέρες με Υπερωρία": ("Υπερωρία Λεπτά", lambda s: int((s > 0).sum())),
-                "Σύνολο Υπερωρίας Λεπτά": ("Υπερωρία Λεπτά", "sum"),
-            }
-        )
+        .agg(**{"Σύνολο Υπερωρίας Λεπτά": ("Υπερωρία Λεπτά", "sum")})
         .sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ"])
         .reset_index(drop=True)
     )
 
     summary["Σύνολο Υπερωρίας (HH:MM)"] = summary["Σύνολο Υπερωρίας Λεπτά"].apply(minutes_to_hhmm)
+    summary["ΑΦΜ"] = summary["ΑΦΜ"].astype(str)
 
     return detailed, summary
 
 
-def autofit_worksheet_columns(worksheet) -> None:
-    for column_cells in worksheet.columns:
-        max_length = 0
-        column_letter = column_cells[0].column_letter
+# =========================
+# LEAVES
+# =========================
 
-        for cell in column_cells:
-            try:
-                cell_value = "" if cell.value is None else str(cell.value)
-                max_length = max(max_length, len(cell_value))
-            except Exception:
-                pass
+def build_leave_summary(
+    classified: pd.DataFrame,
+    employees: pd.DataFrame,
+    year: int
+) -> pd.DataFrame:
+    result = employees.copy()
+    prev = year - 1
 
-        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 40)
+    if classified.empty:
+        result["Κανονική Άδεια από Προηγούμενο Έτος"] = 0
+        result["Κανονική Άδεια από Τρέχον Έτος"] = 0
+        result["Σύνολο Κανονικής Άδειας"] = 0
+        result["Σύνολο Ασθενείας"] = 0
+        result["Σύνολο Άνευ Αποδοχών"] = 0
+        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = result["Υπόλοιπο Προηγούμενου Έτους"]
+        result["Υπόλοιπο Τρέχοντος Έτους Μετά"] = result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"]
+    else:
+        annual_prev = classified[
+            (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
+            (classified["Έτος Άδειας"] == prev)
+        ].groupby("ΑΦΜ").size()
+
+        annual_curr = classified[
+            (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
+            (classified["Έτος Άδειας"] == year)
+        ].groupby("ΑΦΜ").size()
+
+        sick = classified[
+            classified["Τύπος Απουσίας"] == "Άδεια ασθενείας"
+        ].groupby("ΑΦΜ").size()
+
+        unpaid = classified[
+            classified["Τύπος Απουσίας"] == "Άνευ αποδοχών άδεια"
+        ].groupby("ΑΦΜ").size()
+
+        result["Κανονική Άδεια από Προηγούμενο Έτος"] = result["ΑΦΜ"].map(annual_prev).fillna(0).astype(int)
+        result["Κανονική Άδεια από Τρέχον Έτος"] = result["ΑΦΜ"].map(annual_curr).fillna(0).astype(int)
+        result["Σύνολο Ασθενείας"] = result["ΑΦΜ"].map(sick).fillna(0).astype(int)
+        result["Σύνολο Άνευ Αποδοχών"] = result["ΑΦΜ"].map(unpaid).fillna(0).astype(int)
+
+        result["Σύνολο Κανονικής Άδειας"] = (
+            result["Κανονική Άδεια από Προηγούμενο Έτος"] +
+            result["Κανονική Άδεια από Τρέχον Έτος"]
+        )
+
+        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = (
+            result["Υπόλοιπο Προηγούμενου Έτους"] -
+            result["Κανονική Άδεια από Προηγούμενο Έτος"]
+        ).clip(lower=0)
+
+        result["Υπόλοιπο Τρέχοντος Έτους Μετά"] = (
+            result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] -
+            result["Κανονική Άδεια από Τρέχον Έτος"]
+        ).clip(lower=0)
+
+    result = result[
+        [
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "Επώνυμο",
+            "Όνομα",
+            "Ημερομηνία Πρόσληψης",
+            "Ημερομηνία Αποχώρησης",
+            "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους",
+            "Υπόλοιπο Προηγούμενου Έτους",
+            "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους",
+            "Κανονική Άδεια από Προηγούμενο Έτος",
+            "Κανονική Άδεια από Τρέχον Έτος",
+            "Σύνολο Κανονικής Άδειας",
+            "Σύνολο Ασθενείας",
+            "Σύνολο Άνευ Αποδοχών",
+            "Υπόλοιπο Προηγούμενου Έτους Μετά",
+            "Υπόλοιπο Τρέχοντος Έτους Μετά",
+        ]
+    ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ"]).reset_index(drop=True)
+
+    result["Ημερομηνία Πρόσληψης"] = pd.to_datetime(
+        result["Ημερομηνία Πρόσληψης"]
+    ).dt.strftime("%d/%m/%Y")
+
+    result["Ημερομηνία Αποχώρησης"] = result["Ημερομηνία Αποχώρησης"].apply(
+        lambda x: "" if pd.isna(x) else pd.to_datetime(x).strftime("%d/%m/%Y")
+    )
+
+    result["ΑΦΜ"] = result["ΑΦΜ"].astype(str)
+    return result
 
 
-def main() -> None:
+# =========================
+# MAIN
+# =========================
+
+def main():
     if len(sys.argv) != 3:
-        raise ValueError("Χρήση: python src/main.py <year> <month>")
+        raise ValueError("Χρήση: python3 src/main.py <year> <month>")
 
     year = int(sys.argv[1])
     month = int(sys.argv[2])
 
-    if month < 1 or month > 12:
-        raise ValueError("Ο μήνας πρέπει να είναι από 1 έως 12.")
+    root = Path(__file__).resolve().parent.parent
 
-    project_root = Path(__file__).resolve().parent.parent
-    input_file = project_root / "data" / "input" / "raw_attendance.xlsx"
-    monthly_output_file = (
-        project_root / "data" / "output" / f"monthly_report_{year}_{month:02d}.xlsx"
-    )
+    raw = root / "data/input/raw_attendance.xlsx"
+    employees_file = root / "data/input/employees.xlsx"
+    classified_file = root / f"data/output/classified_absences_{year}_{month:02d}.xlsx"
+    output = root / f"data/output/monthly_report_{year}_{month:02d}.xlsx"
 
-    df = load_attendance(input_file)
-    df = clean_attendance(df)
+    df = clean_attendance(load_attendance(raw))
+    employees = load_employees(employees_file)
 
-    print("Min date:", df["Ημ/νία"].min())
-    print("Max date:", df["Ημ/νία"].max())
-    print("Unique dates in raw:", df["Ημ/νία"].nunique())
-    print("Employees in raw:", df["ΑΦΜ"].nunique())
+    absences = find_absences(df, employees, year, month)
 
-    month_holidays = sorted(
-        d for d in get_greek_holidays(year) if d.month == month
-    )
-    print("Αργίες μήνα:", [d.strftime("%d/%m/%Y") for d in month_holidays])
+    if not classified_file.exists():
+        template = build_classified_absence_template(absences)
+        classified_file.parent.mkdir(parents=True, exist_ok=True)
 
-    absences = find_absences(df, year=year, month=month)
-    workdays = calculate_work_days(df, year=year, month=month)
-    overtime_detailed, overtime_summary = calculate_overtime(df, year=year, month=month)
+        with pd.ExcelWriter(classified_file, engine="openpyxl") as writer:
+            template.to_excel(writer, sheet_name="Sheet1", index=False)
+            force_text_column(writer.sheets["Sheet1"], "ΑΦΜ")
 
-    monthly_output_file.parent.mkdir(parents=True, exist_ok=True)
+        print("Δημιουργήθηκε template:", classified_file)
 
-    with pd.ExcelWriter(monthly_output_file, engine="openpyxl") as writer:
+    classified = load_classified_absences(classified_file)
+
+    workdays = calculate_work_days(df, year, month)
+    overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
+    leaves = build_leave_summary(classified, employees, year)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         absences.to_excel(writer, sheet_name="Απουσίες", index=False)
-        workdays.to_excel(writer, sheet_name="Ημέρες Εργασίας", index=False)
-        overtime_detailed.to_excel(writer, sheet_name="Υπερωρίες Αναλυτικά", index=False)
-        overtime_summary.to_excel(writer, sheet_name="Υπερωρίες Σύνολα", index=False)
+        workdays.to_excel(writer, sheet_name="Ημέρες", index=False)
+        overtime_d.to_excel(writer, sheet_name="Υπερωρίες", index=False)
+        overtime_s.to_excel(writer, sheet_name="Σύνολο Υπερωρίας", index=False)
+        leaves.to_excel(writer, sheet_name="Άδειες", index=False)
 
-        for sheet_name in writer.sheets:
-            worksheet = writer.sheets[sheet_name]
-            autofit_worksheet_columns(worksheet)
+        force_text_column(writer.sheets["Απουσίες"], "ΑΦΜ")
+        force_text_column(writer.sheets["Ημέρες"], "ΑΦΜ")
+        force_text_column(writer.sheets["Υπερωρίες"], "ΑΦΜ")
+        force_text_column(writer.sheets["Σύνολο Υπερωρίας"], "ΑΦΜ")
+        force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
 
-    print(f"Το μηνιαίο αρχείο δημιουργήθηκε: {monthly_output_file}")
-    print()
-    print("Περιεχόμενα sheets:")
-    print("- Απουσίες")
-    print("- Ημέρες Εργασίας")
-    print("- Υπερωρίες Αναλυτικά")
-    print("- Υπερωρίες Σύνολα")
+    print("Έτοιμο:", output)
+    print("Template αδειών:", classified_file)
 
 
 if __name__ == "__main__":
