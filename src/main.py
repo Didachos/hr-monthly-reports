@@ -13,6 +13,51 @@ VALID_ABSENCE_TYPES = {
     "Άνευ αποδοχών άδεια",
 }
 
+ERGANI_LEAVE_TYPES = {
+    "Κανονική άδεια",
+    "Αιμοδοτική άδεια",
+    "Άδεια εξετάσεων",
+    "Άδεια άνευ αποδοχών",
+    "Άδεια μητρότητας",
+    "Ειδική παροχή προστασίας της μητρότητας",
+    "Άδεια πατρότητας",
+    "Άδεια φροντίδας παιδιού",
+    "Γονική άδεια",
+    "Άδεια φροντιστή",
+    "Απουσία από την εργασία για λόγους ανωτέρας βίας",
+    "Άδεια για υποβολή σε μεθόδους ιατρικώς υποβοηθούμενης αναπαραγωγής",
+    "Άδεια εξετάσεων προγεννητικού ελέγχου",
+    "Άδεια γάμου",
+    "Άδεια λόγω σοβαρών νοσημάτων των παιδιών",
+    "Άδεια λόγω νοσηλείας των παιδιών",
+    "Άδεια μονογονεϊκών οικογενειών",
+    "Άδεια παρακολούθησης σχολικής επίδοσης τέκνου",
+    "Άδεια λόγω ασθένειας παιδιού ή άλλου εξαρτώμενου μέλους",
+    "Απουσία από την εργασία λόγω επικείμενου σοβαρού κινδύνου βίας ή παρενόχλησης",
+    "Άδεια ασθένειας (ανυπαίτιο κώλυμα παροχής εργασίας)",
+    "Άδεια απουσίας Α.Μ.Ε.Α.",
+    "Άδεια λόγω θανάτου συγγενούς",
+    "Άδεια ανήλικων σπουδαστών",
+    "Άδεια για μεταγγίσεις αίματος και των παραγώγων του ή αιμοκάθαρση",
+    "Εκπαιδευτική άδεια για φοιτητές στο Κ.ΑΝ.Ε.Π. – Γ.Σ.Ε.Ε.",
+    "Άδεια λόγω AIDS",
+    "Ευέλικτες ρυθμίσεις εργασίας",
+    "Άδεια φροντίδας παιδιού (ΩΡΕΣ)",
+    "Γονική άδεια (ΩΡΕΣ)",
+    "Απουσία από την εργασία για λόγους ανωτέρας βίας (ΩΡΕΣ)",
+    "Ευέλικτες ρυθμίσεις εργασίας (ΩΡΕΣ)",
+    "Άδεια εξετάσεων προγεννητικού ελέγχου (ΩΡΕΣ)",
+    "Άδεια παρακολούθησης σχολικής επίδοσης τέκνου (ΩΡΕΣ)",
+    "Άδεια Άλλη",
+    "Άδεια Άλλη (ΩΡΕΣ)",
+}
+
+CLASSIFIED_TO_ERGANI_LEAVE_TYPE = {
+    "Κανονική άδεια": "Κανονική άδεια",
+    "Άδεια ασθενείας": "Άδεια ασθένειας (ανυπαίτιο κώλυμα παροχής εργασίας)",
+    "Άνευ αποδοχών άδεια": "Άδεια άνευ αποδοχών",
+}
+
 
 # =========================
 # HELPERS
@@ -67,6 +112,51 @@ def to_minutes(value):
         return None
 
     return parsed.hour * 60 + parsed.minute
+
+
+def make_validation_row(
+    level: str,
+    category: str,
+    message: str,
+    aa=None,
+    afm=None,
+    last_name=None,
+    first_name=None,
+    date=None,
+    value=None,
+):
+    return {
+        "Επίπεδο": level,
+        "Κατηγορία": category,
+        "Μήνυμα": message,
+        "ΑΑ Παραρτηματος": aa if aa is not None else "",
+        "ΑΦΜ": "" if afm is None else str(afm),
+        "Επώνυμο": last_name if last_name is not None else "",
+        "Όνομα": first_name if first_name is not None else "",
+        "Ημ/νία": date if date is not None else "",
+        "Τιμή": value if value is not None else "",
+    }
+
+
+def format_validation_date(value):
+    if pd.isna(value) or value == "":
+        return ""
+    return pd.to_datetime(value).strftime("%d/%m/%Y")
+
+
+def branch_to_filename_part(value) -> str:
+    if pd.isna(value):
+        return "unknown"
+
+    try:
+        numeric = float(value)
+        if numeric.is_integer():
+            return str(int(numeric))
+    except Exception:
+        pass
+
+    text = str(value).strip()
+    return text.replace("/", "_").replace("\\", "_").replace(" ", "_")
 
 
 # =========================
@@ -513,6 +603,360 @@ def build_leave_summary(
 
 
 # =========================
+# ERGANI EXPORT
+# =========================
+
+def build_ergani_export_df(
+    classified: pd.DataFrame,
+    employees: pd.DataFrame,
+    year: int,
+) -> pd.DataFrame:
+    if classified.empty:
+        return pd.DataFrame(columns=[
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "ΕΠΩΝΥΜΟ",
+            "ΟΝΟΜΑ",
+            "ΗΜΕΡΟΜΗΝΙΑ",
+            "ΤΥΠΟΣ ΑΔΕΙΑΣ",
+            "ΩΡΑ ΑΠΟ",
+            "ΩΡΑ ΕΩΣ",
+            "ΕΤΟΣ",
+            "ΔΙΚ ΗΜΕΡΕΣ",
+        ])
+
+    export_df = classified.copy()
+
+    export_df["ΤΥΠΟΣ ΑΔΕΙΑΣ"] = export_df["Τύπος Απουσίας"].map(CLASSIFIED_TO_ERGANI_LEAVE_TYPE)
+    export_df["ΗΜΕΡΟΜΗΝΙΑ"] = pd.to_datetime(export_df["Ημ/νία"]).dt.strftime("%d/%m/%Y")
+    export_df["ΩΡΑ ΑΠΟ"] = ""
+    export_df["ΩΡΑ ΕΩΣ"] = ""
+
+    export_df["ΕΤΟΣ"] = export_df["Έτος Άδειας"].apply(
+        lambda x: "" if pd.isna(x) else int(x)
+    )
+
+    employee_leave_info = employees[
+        [
+            "ΑΦΜ",
+            "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους",
+            "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους",
+        ]
+    ].drop_duplicates()
+
+    export_df = export_df.merge(
+        employee_leave_info,
+        on="ΑΦΜ",
+        how="left"
+    )
+
+    prev_year = year - 1
+
+    def calculate_entitled_days(row):
+        if row["Τύπος Απουσίας"] != "Κανονική άδεια":
+            return ""
+
+        leave_year = row["Έτος Άδειας"]
+
+        if pd.isna(leave_year):
+            return ""
+
+        leave_year = int(leave_year)
+
+        if leave_year == prev_year:
+            return int(row["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"])
+        elif leave_year == year:
+            return int(row["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
+
+        return ""
+
+    export_df["ΔΙΚ ΗΜΕΡΕΣ"] = export_df.apply(calculate_entitled_days, axis=1)
+
+    export_df = export_df.rename(columns={
+        "Επώνυμο": "ΕΠΩΝΥΜΟ",
+        "Όνομα": "ΟΝΟΜΑ",
+    })
+
+    export_df = export_df[
+        [
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "ΕΠΩΝΥΜΟ",
+            "ΟΝΟΜΑ",
+            "ΗΜΕΡΟΜΗΝΙΑ",
+            "ΤΥΠΟΣ ΑΔΕΙΑΣ",
+            "ΩΡΑ ΑΠΟ",
+            "ΩΡΑ ΕΩΣ",
+            "ΕΤΟΣ",
+            "ΔΙΚ ΗΜΕΡΕΣ",
+        ]
+    ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ", "ΗΜΕΡΟΜΗΝΙΑ"]).reset_index(drop=True)
+
+    export_df["ΑΦΜ"] = export_df["ΑΦΜ"].astype(str)
+    return export_df
+
+
+def write_ergani_exports_by_branch(
+    export_df: pd.DataFrame,
+    output_dir: Path,
+    year: int,
+    month: int,
+) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    created_files = []
+
+    if export_df.empty:
+        return created_files
+
+    for branch_value, branch_df in export_df.groupby("ΑΑ Παραρτηματος", dropna=False):
+        branch_part = branch_to_filename_part(branch_value)
+        file_path = output_dir / f"ergani_export_parartima_{branch_part}_{year}_{month:02d}.xlsx"
+
+        branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
+
+        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+            branch_out.to_excel(writer, sheet_name="Άδειες", index=False)
+            force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
+
+        created_files.append(file_path)
+
+    return created_files
+
+
+# =========================
+# VALIDATION
+# =========================
+
+def build_validation_report(
+    raw_df: pd.DataFrame,
+    cleaned_df: pd.DataFrame,
+    employees: pd.DataFrame,
+    absences: pd.DataFrame,
+    classified: pd.DataFrame,
+    year: int,
+    month: int,
+) -> pd.DataFrame:
+    rows = []
+
+    month_raw = raw_df.copy()
+    month_raw["ΑΑ Παραρτηματος"] = pd.to_numeric(month_raw["ΑΑ Παραρτηματος"], errors="coerce")
+    month_raw["ΑΦΜ"] = month_raw["ΑΦΜ"].astype(str).str.strip()
+    month_raw["Επώνυμο"] = month_raw["Επώνυμο"].astype(str).str.strip()
+    month_raw["Όνομα"] = month_raw["Όνομα"].astype(str).str.strip()
+    month_raw["Ημ/νία"] = pd.to_datetime(month_raw["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+
+    month_raw = month_raw[
+        (month_raw["Ημ/νία"].dt.year == year) &
+        (month_raw["Ημ/νία"].dt.month == month)
+    ].copy()
+
+    employees_afm = set(employees["ΑΦΜ"].astype(str).str.strip())
+
+    unknown_employees = month_raw[~month_raw["ΑΦΜ"].isin(employees_afm)].drop_duplicates(
+        subset=["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"]
+    )
+    for _, r in unknown_employees.iterrows():
+        rows.append(make_validation_row(
+            "ERROR",
+            "Άγνωστος εργαζόμενος",
+            "Το attendance περιέχει ΑΦΜ που δεν υπάρχει στο employees.xlsx",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"], "", r["ΑΦΜ"]
+        ))
+
+    missing_times = month_raw[
+        month_raw["Από"].isna() | month_raw["Έως"].isna() |
+        (month_raw["Από"].astype(str).str.strip() == "") |
+        (month_raw["Έως"].astype(str).str.strip() == "")
+    ]
+    for _, r in missing_times.iterrows():
+        rows.append(make_validation_row(
+            "WARNING",
+            "Ελλιπής ώρα",
+            "Λείπει ώρα Από ή/και Έως",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+            format_validation_date(r["Ημ/νία"]),
+            f"Από={r['Από']}, Έως={r['Έως']}"
+        ))
+
+    check_times = month_raw.copy()
+    check_times["start"] = check_times["Από"].apply(to_minutes)
+    check_times["end"] = check_times["Έως"].apply(to_minutes)
+
+    invalid_times = check_times[
+        (
+            ~(check_times["Από"].isna() | (check_times["Από"].astype(str).str.strip() == "")) &
+            check_times["start"].isna()
+        ) |
+        (
+            ~(check_times["Έως"].isna() | (check_times["Έως"].astype(str).str.strip() == "")) &
+            check_times["end"].isna()
+        )
+    ]
+
+    for _, r in invalid_times.iterrows():
+        rows.append(make_validation_row(
+            "ERROR",
+            "Μη έγκυρη ώρα",
+            "Η ώρα Από ή/και Έως δεν μπορεί να διαβαστεί σωστά",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+            format_validation_date(r["Ημ/νία"]),
+            f"Από={r['Από']}, Έως={r['Έως']}"
+        ))
+
+    dup_day = (
+        month_raw.groupby(["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"])
+        .size()
+        .reset_index(name="Πλήθος")
+    )
+    dup_day = dup_day[dup_day["Πλήθος"] > 1]
+
+    for _, r in dup_day.iterrows():
+        rows.append(make_validation_row(
+            "WARNING",
+            "Πολλαπλές παρουσίες ίδια μέρα",
+            "Υπάρχουν πολλαπλά attendance entries για τον ίδιο εργαζόμενο την ίδια ημέρα",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+            format_validation_date(r["Ημ/νία"]),
+            r["Πλήθος"]
+        ))
+
+    duration_df = check_times.dropna(subset=["start", "end"]).copy()
+    duration_df["worked"] = duration_df["end"] - duration_df["start"]
+    duration_df.loc[duration_df["worked"] < 0, "worked"] += 1440
+
+    suspicious_duration = duration_df[duration_df["worked"] > 12 * 60]
+    for _, r in suspicious_duration.iterrows():
+        rows.append(make_validation_row(
+            "WARNING",
+            "Υπερβολική διάρκεια",
+            "Η δηλωμένη διάρκεια εργασίας ξεπερνά τις 12 ώρες",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+            format_validation_date(r["Ημ/νία"]),
+            minutes_to_hhmm(r["worked"])
+        ))
+
+    cleaned_month = cleaned_df[
+        (cleaned_df["Ημ/νία"].dt.year == year) &
+        (cleaned_df["Ημ/νία"].dt.month == month)
+    ].copy()
+
+    worked_afm = set(cleaned_month["ΑΦΜ"].astype(str).str.strip())
+    no_presence = employees[~employees["ΑΦΜ"].isin(worked_afm)].copy()
+
+    for _, r in no_presence.iterrows():
+        rows.append(make_validation_row(
+            "WARNING",
+            "Καμία παρουσία",
+            "Ο εργαζόμενος δεν έχει καμία παρουσία στον μήνα",
+            r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"], "", ""
+        ))
+
+    if not classified.empty:
+        abs_ref = absences.copy()
+        abs_ref["Ημ/νία"] = pd.to_datetime(abs_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+
+        class_ref = classified.copy()
+        class_ref["Ημ/νία"] = pd.to_datetime(class_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+
+        merged = class_ref.merge(
+            abs_ref[["ΑΦΜ", "Ημ/νία"]],
+            on=["ΑΦΜ", "Ημ/νία"],
+            how="left",
+            indicator=True
+        )
+        unmatched = merged[merged["_merge"] == "left_only"]
+
+        for _, r in unmatched.iterrows():
+            rows.append(make_validation_row(
+                "ERROR",
+                "Μη αντιστοιχισμένη ταξινόμηση",
+                "Υπάρχει classified absence που δεν αντιστοιχεί σε detected absence",
+                r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+                format_validation_date(r["Ημ/νία"]),
+                r["Τύπος Απουσίας"]
+            ))
+
+        dup_classified = (
+            class_ref.groupby(["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία", "Τύπος Απουσίας", "Έτος Άδειας"])
+            .size()
+            .reset_index(name="Πλήθος")
+        )
+        dup_classified = dup_classified[dup_classified["Πλήθος"] > 1]
+
+        for _, r in dup_classified.iterrows():
+            rows.append(make_validation_row(
+                "WARNING",
+                "Διπλή ταξινόμηση",
+                "Υπάρχουν duplicate rows στο classified_absences",
+                r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], "", "",
+                format_validation_date(r["Ημ/νία"]),
+                r["Πλήθος"]
+            ))
+
+        invalid_leave_year = class_ref[
+            (class_ref["Τύπος Απουσίας"] == "Κανονική άδεια") &
+            (~class_ref["Έτος Άδειας"].isin([year - 1, year]))
+        ]
+        for _, r in invalid_leave_year.iterrows():
+            rows.append(make_validation_row(
+                "ERROR",
+                "Μη αποδεκτό έτος άδειας",
+                f"Το έτος άδειας πρέπει να είναι {year - 1} ή {year}",
+                r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+                format_validation_date(r["Ημ/νία"]),
+                r["Έτος Άδειας"]
+            ))
+
+        unmapped_types = class_ref[class_ref["Τύπος Απουσίας"].map(CLASSIFIED_TO_ERGANI_LEAVE_TYPE).isna()]
+        for _, r in unmapped_types.iterrows():
+            rows.append(make_validation_row(
+                "ERROR",
+                "Χωρίς mapping ΕΡΓΑΝΗ",
+                "Ο τύπος απουσίας δεν έχει αντιστοίχιση προς τύπο άδειας ΕΡΓΑΝΗ",
+                r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+                format_validation_date(r["Ημ/νία"]),
+                r["Τύπος Απουσίας"]
+            ))
+
+        mapped_types = class_ref["Τύπος Απουσίας"].map(CLASSIFIED_TO_ERGANI_LEAVE_TYPE)
+        invalid_ergani_labels = class_ref[~mapped_types.fillna("").isin(ERGANI_LEAVE_TYPES)]
+        for _, r in invalid_ergani_labels.iterrows():
+            mapped_value = CLASSIFIED_TO_ERGANI_LEAVE_TYPE.get(r["Τύπος Απουσίας"], "")
+            rows.append(make_validation_row(
+                "ERROR",
+                "Μη αποδεκτός τύπος ΕΡΓΑΝΗ",
+                "Το mapped label δεν υπάρχει στη λίστα τύπων άδειας ΕΡΓΑΝΗ",
+                r["ΑΑ Παραρτηματος"], r["ΑΦΜ"], r["Επώνυμο"], r["Όνομα"],
+                format_validation_date(r["Ημ/νία"]),
+                mapped_value
+            ))
+
+    validation = pd.DataFrame(rows)
+
+    if validation.empty:
+        validation = pd.DataFrame([{
+            "Επίπεδο": "INFO",
+            "Κατηγορία": "Validation",
+            "Μήνυμα": "Δεν εντοπίστηκαν προβλήματα",
+            "ΑΑ Παραρτηματος": "",
+            "ΑΦΜ": "",
+            "Επώνυμο": "",
+            "Όνομα": "",
+            "Ημ/νία": "",
+            "Τιμή": "",
+        }])
+
+    validation = validation.sort_values(
+        ["Επίπεδο", "Κατηγορία", "ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"],
+        na_position="last"
+    ).reset_index(drop=True)
+
+    validation["ΑΦΜ"] = validation["ΑΦΜ"].astype(str)
+    return validation
+
+
+# =========================
 # MAIN
 # =========================
 
@@ -529,8 +973,10 @@ def main():
     employees_file = root / "data/input/employees.xlsx"
     classified_file = root / f"data/output/classified_absences_{year}_{month:02d}.xlsx"
     output = root / f"data/output/monthly_report_{year}_{month:02d}.xlsx"
+    ergani_output_dir = root / "data/output"
 
-    df = clean_attendance(load_attendance(raw))
+    raw_df = load_attendance(raw)
+    df = clean_attendance(raw_df)
     employees = load_employees(employees_file)
 
     absences = find_absences(df, employees, year, month)
@@ -550,6 +996,28 @@ def main():
     workdays = calculate_work_days(df, year, month)
     overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
     leaves = build_leave_summary(classified, employees, year)
+    validation = build_validation_report(
+        raw_df=raw_df,
+        cleaned_df=df,
+        employees=employees,
+        absences=absences,
+        classified=classified,
+        year=year,
+        month=month,
+    )
+
+    ergani_export_df = build_ergani_export_df(
+        classified=classified,
+        employees=employees,
+        year=year,
+    )
+
+    ergani_files = write_ergani_exports_by_branch(
+        export_df=ergani_export_df,
+        output_dir=ergani_output_dir,
+        year=year,
+        month=month,
+    )
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -559,15 +1027,24 @@ def main():
         overtime_d.to_excel(writer, sheet_name="Υπερωρίες", index=False)
         overtime_s.to_excel(writer, sheet_name="Σύνολο Υπερωρίας", index=False)
         leaves.to_excel(writer, sheet_name="Άδειες", index=False)
+        validation.to_excel(writer, sheet_name="Validation", index=False)
 
         force_text_column(writer.sheets["Απουσίες"], "ΑΦΜ")
         force_text_column(writer.sheets["Ημέρες"], "ΑΦΜ")
         force_text_column(writer.sheets["Υπερωρίες"], "ΑΦΜ")
         force_text_column(writer.sheets["Σύνολο Υπερωρίας"], "ΑΦΜ")
         force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
+        force_text_column(writer.sheets["Validation"], "ΑΦΜ")
 
     print("Έτοιμο:", output)
     print("Template αδειών:", classified_file)
+
+    if ergani_files:
+        print("Ergani export files:")
+        for file_path in ergani_files:
+            print("-", file_path)
+    else:
+        print("Δεν δημιουργήθηκαν αρχεία Ergani export (δεν υπάρχουν συμπληρωμένες ταξινομημένες άδειες).")
 
 
 if __name__ == "__main__":
