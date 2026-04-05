@@ -6,6 +6,7 @@ import holidays
 
 
 STANDARD_WORK_MINUTES = 8 * 60
+OVERWORK_LIMIT_MINUTES = 1 * 60
 
 VALID_ABSENCE_TYPES = {
     "Κανονική άδεια",
@@ -470,21 +471,42 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int):
     month_df["worked"] = month_df["end"] - month_df["start"]
     month_df.loc[month_df["worked"] < 0, "worked"] += 1440
 
-    month_df["Υπερωρία Λεπτά"] = (
+    month_df["Extra Λεπτά"] = (
         month_df["worked"] - STANDARD_WORK_MINUTES
     ).clip(lower=0)
 
+    month_df["Υπεργασία Λεπτά"] = month_df["Extra Λεπτά"].clip(upper=OVERWORK_LIMIT_MINUTES)
+    month_df["Υπερωρία Λεπτά"] = (
+        month_df["Extra Λεπτά"] - month_df["Υπεργασία Λεπτά"]
+    ).clip(lower=0)
+
+    month_df["Υπεργασία"] = month_df["Υπεργασία Λεπτά"].apply(
+        lambda x: "ΝΑΙ" if x > 0 else ""
+    )
     month_df["Υπερωρία"] = month_df["Υπερωρία Λεπτά"].apply(
         lambda x: "ΝΑΙ" if x > 0 else ""
     )
+
     month_df["Συνολική Διάρκεια"] = month_df["worked"].apply(minutes_to_hhmm)
+    month_df["Υπεργασία (HH:MM)"] = month_df["Υπεργασία Λεπτά"].apply(minutes_to_hhmm)
     month_df["Υπερωρία (HH:MM)"] = month_df["Υπερωρία Λεπτά"].apply(minutes_to_hhmm)
 
     detailed = month_df[
         [
-            "ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία",
-            "Από", "Έως", "Συνολική Διάρκεια", "Υπερωρία",
-            "Υπερωρία Λεπτά", "Υπερωρία (HH:MM)"
+            "ΑΑ Παραρτηματος",
+            "ΑΦΜ",
+            "Επώνυμο",
+            "Όνομα",
+            "Ημ/νία",
+            "Από",
+            "Έως",
+            "Συνολική Διάρκεια",
+            "Υπεργασία",
+            "Υπεργασία Λεπτά",
+            "Υπεργασία (HH:MM)",
+            "Υπερωρία",
+            "Υπερωρία Λεπτά",
+            "Υπερωρία (HH:MM)",
         ]
     ].copy()
 
@@ -499,11 +521,17 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int):
             ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"],
             as_index=False
         )
-        .agg(**{"Σύνολο Υπερωρίας Λεπτά": ("Υπερωρία Λεπτά", "sum")})
+        .agg(
+            **{
+                "Σύνολο Υπεργασίας Λεπτά": ("Υπεργασία Λεπτά", "sum"),
+                "Σύνολο Υπερωρίας Λεπτά": ("Υπερωρία Λεπτά", "sum"),
+            }
+        )
         .sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ"])
         .reset_index(drop=True)
     )
 
+    summary["Σύνολο Υπεργασίας (HH:MM)"] = summary["Σύνολο Υπεργασίας Λεπτά"].apply(minutes_to_hhmm)
     summary["Σύνολο Υπερωρίας (HH:MM)"] = summary["Σύνολο Υπερωρίας Λεπτά"].apply(minutes_to_hhmm)
     summary["ΑΦΜ"] = summary["ΑΦΜ"].astype(str)
 
@@ -1025,14 +1053,14 @@ def main():
         absences.to_excel(writer, sheet_name="Απουσίες", index=False)
         workdays.to_excel(writer, sheet_name="Ημέρες", index=False)
         overtime_d.to_excel(writer, sheet_name="Υπερωρίες", index=False)
-        overtime_s.to_excel(writer, sheet_name="Σύνολο Υπερωρίας", index=False)
+        overtime_s.to_excel(writer, sheet_name="Σύνολο Extra", index=False)
         leaves.to_excel(writer, sheet_name="Άδειες", index=False)
         validation.to_excel(writer, sheet_name="Validation", index=False)
 
         force_text_column(writer.sheets["Απουσίες"], "ΑΦΜ")
         force_text_column(writer.sheets["Ημέρες"], "ΑΦΜ")
         force_text_column(writer.sheets["Υπερωρίες"], "ΑΦΜ")
-        force_text_column(writer.sheets["Σύνολο Υπερωρίας"], "ΑΦΜ")
+        force_text_column(writer.sheets["Σύνολο Extra"], "ΑΦΜ")
         force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
         force_text_column(writer.sheets["Validation"], "ΑΦΜ")
 
