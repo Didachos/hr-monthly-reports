@@ -4,9 +4,14 @@ import sys
 import pandas as pd
 import holidays
 
-
 STANDARD_WORK_MINUTES = 8 * 60
 OVERWORK_LIMIT_MINUTES = 1 * 60
+
+
+LOW_CURRENT_LEAVE_BALANCE_THRESHOLD = 3
+HIGH_ABSENCE_COUNT_THRESHOLD = 5
+HIGH_OVERWORK_MINUTES_THRESHOLD = 5 * 60
+HIGH_OVERTIME_MINUTES_THRESHOLD = 8 * 60
 
 VALID_ABSENCE_TYPES = {
     "Κανονική άδεια",
@@ -158,6 +163,27 @@ def branch_to_filename_part(value) -> str:
 
     text = str(value).strip()
     return text.replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+def make_alert_row(
+    level: str,
+    category: str,
+    aa=None,
+    afm=None,
+    last_name=None,
+    first_name=None,
+    message: str = "",
+    value=None,
+):
+    return {
+        "Επίπεδο": level,
+        "Κατηγορία": category,
+        "ΑΑ Παραρτηματος": aa if aa is not None else "",
+        "ΑΦΜ": "" if afm is None else str(afm),
+        "Επώνυμο": last_name if last_name is not None else "",
+        "Όνομα": first_name if first_name is not None else "",
+        "Μήνυμα": message,
+        "Τιμή": value if value is not None else "",
+    }
 
 
 # =========================
@@ -983,6 +1009,227 @@ def build_validation_report(
     validation["ΑΦΜ"] = validation["ΑΦΜ"].astype(str)
     return validation
 
+def build_alerts_report(
+    employees: pd.DataFrame,
+    absences: pd.DataFrame,
+    classified: pd.DataFrame,
+    workdays: pd.DataFrame,
+    overtime_summary: pd.DataFrame,
+    leaves: pd.DataFrame,
+    year: int,
+) -> pd.DataFrame:
+    rows = []
+
+    # 1. Χαμηλό υπόλοιπο τρέχοντος έτους
+    low_leave = leaves[
+        pd.to_numeric(leaves["Υπόλοιπο Τρέχοντος Έτους Μετά"], errors="coerce").fillna(0)
+        <= LOW_CURRENT_LEAVE_BALANCE_THRESHOLD
+    ].copy()
+
+    for _, r in low_leave.iterrows():
+        rows.append(make_alert_row(
+            level="WARNING",
+            category="Χαμηλό υπόλοιπο άδειας",
+            aa=r["ΑΑ Παραρτηματος"],
+            afm=r["ΑΦΜ"],
+            last_name=r["Επώνυμο"],
+            first_name=r["Όνομα"],
+            message=f"Χαμηλό υπόλοιπο τρέχοντος έτους (≤ {LOW_CURRENT_LEAVE_BALANCE_THRESHOLD})",
+            value=r["Υπόλοιπο Τρέχοντος Έτους Μετά"],
+        ))
+
+    # 2. Καμία παρουσία στον μήνα
+    worked_afm = set(workdays["ΑΦΜ"].astype(str).str.strip())
+    no_presence = employees[~employees["ΑΦΜ"].astype(str).str.strip().isin(worked_afm)].copy()
+
+    for _, r in no_presence.iterrows():
+        rows.append(make_alert_row(
+            level="WARNING",
+            category="Καμία παρουσία",
+            aa=r["ΑΑ Παραρτηματος"],
+            afm=r["ΑΦΜ"],
+            last_name=r["Επώνυμο"],
+            first_name=r["Όνομα"],
+            message="Ο εργαζόμενος δεν έχει καμία παρουσία στον μήνα",
+            value="0",
+        ))
+
+    # 3. Πολλές απουσίες
+    if not absences.empty:
+        abs_tmp = absences.copy()
+        abs_count = (
+            abs_tmp.groupby(["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"], as_index=False)
+            .size()
+            .rename(columns={"size": "Πλήθος Απουσιών"})
+        )
+
+        high_abs = abs_count[abs_count["Πλήθος Απουσιών"] > HIGH_ABSENCE_COUNT_THRESHOLD]
+
+        for _, r in high_abs.iterrows():
+            rows.append(make_alert_row(
+                level="WARNING",
+                category="Πολλές απουσίες",
+                aa=r["ΑΑ Παραρτηματος"],
+                afm=r["ΑΦΜ"],
+                last_name=r["Επώνυμο"],
+                first_name=r["Όνομα"],
+                message=f"Πλήθος απουσιών μεγαλύτερο από {HIGH_ABSENCE_COUNT_THRESHOLD}",
+                value=r["Πλήθος Απουσιών"],
+            ))
+
+    # 4. Πολλή υπεργασία
+    if "Σύνολο Υπεργασίας Λεπτά" in overtime_summary.columns:
+        high_overwork = overtime_summary[
+            pd.to_numeric(overtime_summary["Σύνολο Υπεργασίας Λεπτά"], errors="coerce").fillna(0)
+            > HIGH_OVERWORK_MINUTES_THRESHOLD
+        ].copy()
+
+        for _, r in high_overwork.iterrows():
+            rows.append(make_alert_row(
+                level="INFO",
+                category="Πολλή υπεργασία",
+                aa=r["ΑΑ Παραρτηματος"],
+                afm=r["ΑΦΜ"],
+                last_name=r["Επώνυμο"],
+                first_name=r["Όνομα"],
+                message=f"Σύνολο υπεργασίας μεγαλύτερο από {minutes_to_hhmm(HIGH_OVERWORK_MINUTES_THRESHOLD)}",
+                value=r["Σύνολο Υπεργασίας (HH:MM)"],
+            ))
+
+    # 5. Πολλή υπερωρία
+    if "Σύνολο Υπερωρίας Λεπτά" in overtime_summary.columns:
+        high_overtime = overtime_summary[
+            pd.to_numeric(overtime_summary["Σύνολο Υπερωρίας Λεπτά"], errors="coerce").fillna(0)
+            > HIGH_OVERTIME_MINUTES_THRESHOLD
+        ].copy()
+
+        for _, r in high_overtime.iterrows():
+            rows.append(make_alert_row(
+                level="WARNING",
+                category="Πολλή υπερωρία",
+                aa=r["ΑΑ Παραρτηματος"],
+                afm=r["ΑΦΜ"],
+                last_name=r["Επώνυμο"],
+                first_name=r["Όνομα"],
+                message=f"Σύνολο υπερωρίας μεγαλύτερο από {minutes_to_hhmm(HIGH_OVERTIME_MINUTES_THRESHOLD)}",
+                value=r["Σύνολο Υπερωρίας (HH:MM)"],
+            ))
+
+    # 6. Απουσίες χωρίς classification
+    if not absences.empty:
+        abs_ref = absences.copy()
+        abs_ref["Ημ/νία_dt"] = pd.to_datetime(abs_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+
+        if classified.empty:
+            unclassified = (
+                abs_ref.groupby(["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"], as_index=False)
+                .size()
+                .rename(columns={"size": "Αταξινόμητες Απουσίες"})
+            )
+        else:
+            class_ref = classified.copy()
+            class_ref["Ημ/νία_dt"] = pd.to_datetime(class_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+
+            merged = abs_ref.merge(
+                class_ref[["ΑΦΜ", "Ημ/νία_dt"]],
+                on=["ΑΦΜ", "Ημ/νία_dt"],
+                how="left",
+                indicator=True
+            )
+
+            unclassified_rows = merged[merged["_merge"] == "left_only"].copy()
+
+            unclassified = (
+                unclassified_rows.groupby(["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα"], as_index=False)
+                .size()
+                .rename(columns={"size": "Αταξινόμητες Απουσίες"})
+            )
+
+        for _, r in unclassified.iterrows():
+            rows.append(make_alert_row(
+                level="WARNING",
+                category="Απουσίες χωρίς classification",
+                aa=r["ΑΑ Παραρτηματος"],
+                afm=r["ΑΦΜ"],
+                last_name=r["Επώνυμο"],
+                first_name=r["Όνομα"],
+                message="Υπάρχουν detected absences χωρίς συμπληρωμένη ταξινόμηση",
+                value=r["Αταξινόμητες Απουσίες"],
+            ))
+
+    # 7. Κανονική άδεια με μηδενικό entitlement στο δηλωμένο έτος
+    if not classified.empty:
+        class_check = classified.copy()
+
+        employee_leave_info = employees[
+            [
+                "ΑΦΜ",
+                "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους",
+                "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους",
+            ]
+        ].drop_duplicates()
+
+        class_check = class_check.merge(employee_leave_info, on="ΑΦΜ", how="left")
+
+        prev_year = year - 1
+
+        def entitlement_for_row(row):
+            if row["Τύπος Απουσίας"] != "Κανονική άδεια":
+                return None
+            if pd.isna(row["Έτος Άδειας"]):
+                return None
+
+            leave_year = int(row["Έτος Άδειας"])
+            if leave_year == prev_year:
+                return row["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"]
+            if leave_year == year:
+                return row["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"]
+            return None
+
+        class_check["δικ_ημέρες_check"] = class_check.apply(entitlement_for_row, axis=1)
+
+        invalid_entitlement = class_check[
+            (class_check["Τύπος Απουσίας"] == "Κανονική άδεια") &
+            (
+                class_check["δικ_ημέρες_check"].isna() |
+                (pd.to_numeric(class_check["δικ_ημέρες_check"], errors="coerce").fillna(0) <= 0)
+            )
+        ]
+
+        for _, r in invalid_entitlement.iterrows():
+            rows.append(make_alert_row(
+                level="ERROR",
+                category="Μηδενικό entitlement άδειας",
+                aa=r["ΑΑ Παραρτηματος"],
+                afm=r["ΑΦΜ"],
+                last_name=r["Επώνυμο"],
+                first_name=r["Όνομα"],
+                message="Κανονική άδεια με μηδενικό ή μη διαθέσιμο entitlement στο δηλωμένο έτος",
+                value=r["Έτος Άδειας"],
+            ))
+
+    alerts = pd.DataFrame(rows)
+
+    if alerts.empty:
+        alerts = pd.DataFrame([{
+            "Επίπεδο": "INFO",
+            "Κατηγορία": "Alerts",
+            "ΑΑ Παραρτηματος": "",
+            "ΑΦΜ": "",
+            "Επώνυμο": "",
+            "Όνομα": "",
+            "Μήνυμα": "Δεν εντοπίστηκαν alerts",
+            "Τιμή": "",
+        }])
+
+    alerts = alerts.sort_values(
+        ["Επίπεδο", "Κατηγορία", "ΑΑ Παραρτηματος", "ΑΦΜ"],
+        na_position="last"
+    ).reset_index(drop=True)
+
+    alerts["ΑΦΜ"] = alerts["ΑΦΜ"].astype(str)
+    return alerts
+
 
 # =========================
 # MAIN
@@ -1024,6 +1271,17 @@ def main():
     workdays = calculate_work_days(df, year, month)
     overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
     leaves = build_leave_summary(classified, employees, year)
+
+    alerts = build_alerts_report(
+        employees=employees,
+        absences=absences,
+        classified=classified,
+        workdays=workdays,
+        overtime_summary=overtime_s,
+        leaves=leaves,
+        year=year,
+    )
+
     validation = build_validation_report(
         raw_df=raw_df,
         cleaned_df=df,
@@ -1056,6 +1314,7 @@ def main():
         overtime_s.to_excel(writer, sheet_name="Σύνολο Extra", index=False)
         leaves.to_excel(writer, sheet_name="Άδειες", index=False)
         validation.to_excel(writer, sheet_name="Validation", index=False)
+        alerts.to_excel(writer, sheet_name="Alerts", index=False)
 
         force_text_column(writer.sheets["Απουσίες"], "ΑΦΜ")
         force_text_column(writer.sheets["Ημέρες"], "ΑΦΜ")
@@ -1063,6 +1322,7 @@ def main():
         force_text_column(writer.sheets["Σύνολο Extra"], "ΑΦΜ")
         force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
         force_text_column(writer.sheets["Validation"], "ΑΦΜ")
+        force_text_column(writer.sheets["Alerts"], "ΑΦΜ")
 
     print("Έτοιμο:", output)
     print("Template αδειών:", classified_file)
