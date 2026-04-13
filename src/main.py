@@ -164,6 +164,22 @@ def branch_to_filename_part(value) -> str:
     text = str(value).strip()
     return text.replace("/", "_").replace("\\", "_").replace(" ", "_")
 
+
+def get_entitled_days(row, year: int):
+    """Επιστρέφει τις δικαιούμενες ημέρες κανονικής άδειας για το έτος της γραμμής, ή None αν δεν εφαρμόζεται."""
+    if row["Τύπος Απουσίας"] != "Κανονική άδεια":
+        return None
+    leave_year = row["Έτος Άδειας"]
+    if pd.isna(leave_year):
+        return None
+    leave_year = int(leave_year)
+    if leave_year == year - 1:
+        return int(row["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"])
+    if leave_year == year:
+        return int(row["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
+    return None
+
+
 def make_alert_row(
     level: str,
     category: str,
@@ -429,7 +445,6 @@ def find_absences(
 
     absences = merged[merged["present"].isna()].copy()
     absences["Κατάσταση"] = "ΑΠΩΝ"
-    absences["Ημ/νία"] = pd.to_datetime(absences["Ημ/νία"]).dt.strftime("%d/%m/%Y")
 
     result = absences[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία", "Κατάσταση"]
@@ -536,7 +551,6 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int):
         ]
     ].copy()
 
-    detailed["Ημ/νία"] = pd.to_datetime(detailed["Ημ/νία"]).dt.strftime("%d/%m/%Y")
     detailed = detailed.sort_values(
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]
     ).reset_index(drop=True)
@@ -576,52 +590,43 @@ def build_leave_summary(
     result = employees.copy()
     prev = year - 1
 
-    if classified.empty:
-        result["Κανονική Άδεια από Προηγούμενο Έτος"] = 0
-        result["Κανονική Άδεια από Τρέχον Έτος"] = 0
-        result["Σύνολο Κανονικής Άδειας"] = 0
-        result["Σύνολο Ασθενείας"] = 0
-        result["Σύνολο Άνευ Αποδοχών"] = 0
-        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = result["Υπόλοιπο Προηγούμενου Έτους"]
-        result["Υπόλοιπο Τρέχοντος Έτους Μετά"] = result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"]
-    else:
-        annual_prev = classified[
-            (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
-            (classified["Έτος Άδειας"] == prev)
-        ].groupby("ΑΦΜ").size()
+    annual_prev = classified[
+        (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
+        (classified["Έτος Άδειας"] == prev)
+    ].groupby("ΑΦΜ").size()
 
-        annual_curr = classified[
-            (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
-            (classified["Έτος Άδειας"] == year)
-        ].groupby("ΑΦΜ").size()
+    annual_curr = classified[
+        (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
+        (classified["Έτος Άδειας"] == year)
+    ].groupby("ΑΦΜ").size()
 
-        sick = classified[
-            classified["Τύπος Απουσίας"] == "Άδεια ασθενείας"
-        ].groupby("ΑΦΜ").size()
+    sick = classified[
+        classified["Τύπος Απουσίας"] == "Άδεια ασθενείας"
+    ].groupby("ΑΦΜ").size()
 
-        unpaid = classified[
-            classified["Τύπος Απουσίας"] == "Άνευ αποδοχών άδεια"
-        ].groupby("ΑΦΜ").size()
+    unpaid = classified[
+        classified["Τύπος Απουσίας"] == "Άνευ αποδοχών άδεια"
+    ].groupby("ΑΦΜ").size()
 
-        result["Κανονική Άδεια από Προηγούμενο Έτος"] = result["ΑΦΜ"].map(annual_prev).fillna(0).astype(int)
-        result["Κανονική Άδεια από Τρέχον Έτος"] = result["ΑΦΜ"].map(annual_curr).fillna(0).astype(int)
-        result["Σύνολο Ασθενείας"] = result["ΑΦΜ"].map(sick).fillna(0).astype(int)
-        result["Σύνολο Άνευ Αποδοχών"] = result["ΑΦΜ"].map(unpaid).fillna(0).astype(int)
+    result["Κανονική Άδεια από Προηγούμενο Έτος"] = result["ΑΦΜ"].map(annual_prev).fillna(0).astype(int)
+    result["Κανονική Άδεια από Τρέχον Έτος"] = result["ΑΦΜ"].map(annual_curr).fillna(0).astype(int)
+    result["Σύνολο Ασθενείας"] = result["ΑΦΜ"].map(sick).fillna(0).astype(int)
+    result["Σύνολο Άνευ Αποδοχών"] = result["ΑΦΜ"].map(unpaid).fillna(0).astype(int)
 
-        result["Σύνολο Κανονικής Άδειας"] = (
-            result["Κανονική Άδεια από Προηγούμενο Έτος"] +
-            result["Κανονική Άδεια από Τρέχον Έτος"]
-        )
+    result["Σύνολο Κανονικής Άδειας"] = (
+        result["Κανονική Άδεια από Προηγούμενο Έτος"] +
+        result["Κανονική Άδεια από Τρέχον Έτος"]
+    )
 
-        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = (
-            result["Υπόλοιπο Προηγούμενου Έτους"] -
-            result["Κανονική Άδεια από Προηγούμενο Έτος"]
-        ).clip(lower=0)
+    result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = (
+        result["Υπόλοιπο Προηγούμενου Έτους"] -
+        result["Κανονική Άδεια από Προηγούμενο Έτος"]
+    ).clip(lower=0)
 
-        result["Υπόλοιπο Τρέχοντος Έτους Μετά"] = (
-            result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] -
-            result["Κανονική Άδεια από Τρέχον Έτος"]
-        ).clip(lower=0)
+    result["Υπόλοιπο Τρέχοντος Έτους Μετά"] = (
+        result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] -
+        result["Κανονική Άδεια από Τρέχον Έτος"]
+    ).clip(lower=0)
 
     result = result[
         [
@@ -704,27 +709,10 @@ def build_ergani_export_df(
         how="left"
     )
 
-    prev_year = year - 1
-
-    def calculate_entitled_days(row):
-        if row["Τύπος Απουσίας"] != "Κανονική άδεια":
-            return ""
-
-        leave_year = row["Έτος Άδειας"]
-
-        if pd.isna(leave_year):
-            return ""
-
-        leave_year = int(leave_year)
-
-        if leave_year == prev_year:
-            return int(row["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"])
-        elif leave_year == year:
-            return int(row["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
-
-        return ""
-
-    export_df["ΔΙΚ ΗΜΕΡΕΣ"] = export_df.apply(calculate_entitled_days, axis=1)
+    export_df["ΔΙΚ ΗΜΕΡΕΣ"] = export_df.apply(
+        lambda row: (v if (v := get_entitled_days(row, year)) is not None else ""),
+        axis=1,
+    )
 
     export_df = export_df.rename(columns={
         "Επώνυμο": "ΕΠΩΝΥΜΟ",
@@ -908,10 +896,7 @@ def build_validation_report(
 
     if not classified.empty:
         abs_ref = absences.copy()
-        abs_ref["Ημ/νία"] = pd.to_datetime(abs_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
-
         class_ref = classified.copy()
-        class_ref["Ημ/νία"] = pd.to_datetime(class_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
 
         merged = class_ref.merge(
             abs_ref[["ΑΦΜ", "Ημ/νία"]],
@@ -1118,7 +1103,6 @@ def build_alerts_report(
     # 6. Απουσίες χωρίς classification
     if not absences.empty:
         abs_ref = absences.copy()
-        abs_ref["Ημ/νία_dt"] = pd.to_datetime(abs_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
 
         if classified.empty:
             unclassified = (
@@ -1128,11 +1112,10 @@ def build_alerts_report(
             )
         else:
             class_ref = classified.copy()
-            class_ref["Ημ/νία_dt"] = pd.to_datetime(class_ref["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
 
             merged = abs_ref.merge(
-                class_ref[["ΑΦΜ", "Ημ/νία_dt"]],
-                on=["ΑΦΜ", "Ημ/νία_dt"],
+                class_ref[["ΑΦΜ", "Ημ/νία"]],
+                on=["ΑΦΜ", "Ημ/νία"],
                 how="left",
                 indicator=True
             )
@@ -1171,22 +1154,9 @@ def build_alerts_report(
 
         class_check = class_check.merge(employee_leave_info, on="ΑΦΜ", how="left")
 
-        prev_year = year - 1
-
-        def entitlement_for_row(row):
-            if row["Τύπος Απουσίας"] != "Κανονική άδεια":
-                return None
-            if pd.isna(row["Έτος Άδειας"]):
-                return None
-
-            leave_year = int(row["Έτος Άδειας"])
-            if leave_year == prev_year:
-                return row["Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους"]
-            if leave_year == year:
-                return row["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"]
-            return None
-
-        class_check["δικ_ημέρες_check"] = class_check.apply(entitlement_for_row, axis=1)
+        class_check["δικ_ημέρες_check"] = class_check.apply(
+            lambda row: get_entitled_days(row, year), axis=1
+        )
 
         invalid_entitlement = class_check[
             (class_check["Τύπος Απουσίας"] == "Κανονική άδεια") &
