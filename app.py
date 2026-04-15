@@ -53,22 +53,31 @@ def excel_bytes(sheets: dict) -> bytes:
     return buf.getvalue()
 
 
-def leave_balance_table(leaves: pd.DataFrame, month: int) -> pd.DataFrame:
+def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for _, r in leaves.iterrows():
         curr_taken = int(r["Κανονική Άδεια από Τρέχον Έτος"])
         curr_total = int(r["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
-        prev_remaining = int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"])
-
-        row = {
+        rows.append({
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
-            "Τρέχον Έτος (χρησιμοποιήθηκαν/σύνολο)": f"{curr_taken}/{curr_total}",
-            "Υπόλοιπο Τρέχοντος": int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"]),
-        }
-        if month <= 3:
-            row["Υπόλοιπο Προηγ. Έτους"] = prev_remaining
-        rows.append(row)
+            "Χρησιμοποιήθηκαν/Σύνολο": f"{curr_taken}/{curr_total}",
+            "Υπόλοιπο": int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"]),
+        })
+    return pd.DataFrame(rows)
+
+
+def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, r in leaves.iterrows():
+        prev_taken = int(r["Κανονική Άδεια από Προηγούμενο Έτος"])
+        prev_available = int(r["Υπόλοιπο Προηγούμενου Έτους"])
+        rows.append({
+            "Επώνυμο": r["Επώνυμο"],
+            "Όνομα": r["Όνομα"],
+            "Χρησιμοποιήθηκαν/Διαθέσιμο": f"{prev_taken}/{prev_available}",
+            "Υπόλοιπο": int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"]),
+        })
     return pd.DataFrame(rows)
 
 
@@ -195,6 +204,7 @@ with tab_run:
                 # Αποθήκευση αποτελεσμάτων για tab υπολοίπων
                 st.session_state["leaves"] = leaves
                 st.session_state["leaves_month"] = month
+                st.session_state["leaves_year"] = year
 
         except Exception as e:
             st.error(f"Σφάλμα: {e}")
@@ -268,9 +278,10 @@ with tab_balances:
                 latest = reports[0]
                 try:
                     leaves_df = pd.read_excel(latest, sheet_name="Άδειες")
-                    # Εξαγωγή μήνα από το όνομα αρχείου (monthly_report_YYYY_MM.xlsx)
+                    # Εξαγωγή έτους/μήνα από το όνομα αρχείου (monthly_report_YYYY_MM.xlsx)
                     parts = latest.stem.split("_")
                     leaves_month = int(parts[-1])
+                    leaves_year = int(parts[-2])
                     st.caption(f"Από: {latest.name}")
                 except Exception:
                     pass
@@ -278,14 +289,6 @@ with tab_balances:
     if leaves_df is None:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
     else:
-        table = leave_balance_table(leaves_df, leaves_month)
-
-        if leaves_month <= 3:
-            st.caption("📌 Εντός Q1 — εμφανίζεται και το υπόλοιπο προηγούμενου έτους.")
-        else:
-            st.caption("📌 Μετά τον Μάρτιο — το υπόλοιπο προηγούμενου έτους έχει λήξει.")
-
-        # Χρωματισμός υπολοίπου τρέχοντος έτους
         def color_balance(val):
             if isinstance(val, int):
                 if val <= 3:
@@ -295,8 +298,26 @@ with tab_balances:
                 return "color: green"
             return ""
 
+        # Τρέχον έτος
+        leaves_year = st.session_state.get("leaves_year", "")
+        st.subheader(f"📅 Τρέχον Έτος{f' {leaves_year}' if leaves_year else ''}")
+        curr_table = leave_balance_table_current(leaves_df)
         st.dataframe(
-            table.style.map(color_balance, subset=["Υπόλοιπο Τρέχοντος"]),
+            curr_table.style.map(color_balance, subset=["Υπόλοιπο"]),
             use_container_width=True,
             hide_index=True,
         )
+
+        # Προηγούμενο έτος — μόνο αν είναι Q1 και υπάρχει υπόλοιπο
+        if leaves_month <= 3:
+            prev_table = leave_balance_table_prev(leaves_df)
+            has_prev_balance = prev_table["Υπόλοιπο"].sum() > 0
+            if has_prev_balance:
+                prev_year = int(leaves_year) - 1 if leaves_year else ""
+                st.subheader(f"📅 Προηγούμενο Έτος{f' {prev_year}' if prev_year else ''}")
+                st.caption("⚠️ Το υπόλοιπο λήγει στο τέλος Μαρτίου.")
+                st.dataframe(
+                    prev_table.style.map(color_balance, subset=["Υπόλοιπο"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
