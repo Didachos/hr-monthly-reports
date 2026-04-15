@@ -144,6 +144,14 @@ def make_validation_row(
     }
 
 
+def format_dates_for_excel(df: pd.DataFrame, fmt: str = "%d/%m/%Y") -> pd.DataFrame:
+    """Μετατρέπει όλες τις datetime στήλες σε string πριν την εγγραφή στο Excel."""
+    df = df.copy()
+    for col in df.select_dtypes(include=["datetime64"]).columns:
+        df[col] = df[col].dt.strftime(fmt)
+    return df
+
+
 def format_validation_date(value):
     if pd.isna(value) or value == "":
         return ""
@@ -759,7 +767,7 @@ def write_ergani_exports_by_branch(
 
         branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
 
-        with pd.ExcelWriter(file_path, engine="openpyxl", datetime_format="DD/MM/YYYY") as writer:
+        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
             branch_out.to_excel(writer, sheet_name="Άδειες", index=False)
             force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
 
@@ -1233,7 +1241,7 @@ def main():
         classified_file.parent.mkdir(parents=True, exist_ok=True)
 
         with pd.ExcelWriter(classified_file, engine="openpyxl") as writer:
-            template.to_excel(writer, sheet_name="Sheet1", index=False)
+            format_dates_for_excel(template).to_excel(writer, sheet_name="Sheet1", index=False)
             force_text_column(writer.sheets["Sheet1"], "ΑΦΜ")
 
         print("Δημιουργήθηκε template:", classified_file)
@@ -1280,13 +1288,13 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        absences.to_excel(writer, sheet_name="Απουσίες", index=False)
-        workdays.to_excel(writer, sheet_name="Ημέρες", index=False)
-        overtime_d.to_excel(writer, sheet_name="Υπερωρίες", index=False)
-        overtime_s.to_excel(writer, sheet_name="Σύνολο Extra", index=False)
-        leaves.to_excel(writer, sheet_name="Άδειες", index=False)
-        validation.to_excel(writer, sheet_name="Validation", index=False)
-        alerts.to_excel(writer, sheet_name="Alerts", index=False)
+        format_dates_for_excel(absences).to_excel(writer, sheet_name="Απουσίες", index=False)
+        format_dates_for_excel(workdays).to_excel(writer, sheet_name="Ημέρες", index=False)
+        format_dates_for_excel(overtime_d).to_excel(writer, sheet_name="Υπερωρίες", index=False)
+        format_dates_for_excel(overtime_s).to_excel(writer, sheet_name="Σύνολο Extra", index=False)
+        format_dates_for_excel(leaves).to_excel(writer, sheet_name="Άδειες", index=False)
+        format_dates_for_excel(validation).to_excel(writer, sheet_name="Validation", index=False)
+        format_dates_for_excel(alerts).to_excel(writer, sheet_name="Alerts", index=False)
 
         for sheet in writer.sheets.values():
             force_text_column(sheet, "ΑΦΜ")
