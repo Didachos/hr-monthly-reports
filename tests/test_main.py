@@ -251,7 +251,7 @@ class TestBuildLeaveSummary:
         assert result["Σύνολο Άνευ Αποδοχών"].iloc[0] == 0
 
     def test_empty_classified_preserves_entitlement_balance(self):
-        result = build_leave_summary(pd.DataFrame(), self._employees(), 2026)
+        result = build_leave_summary(pd.DataFrame(), self._employees(), 2026, month=1)
         assert result["Υπόλοιπο Τρέχοντος Έτους Μετά"].iloc[0] == 25
         assert result["Υπόλοιπο Προηγούμενου Έτους Μετά"].iloc[0] == 5
 
@@ -265,7 +265,7 @@ class TestBuildLeaveSummary:
             "Τύπος Απουσίας": "Κανονική άδεια",
             "Έτος Άδειας": 2026,
         }])
-        result = build_leave_summary(classified, self._employees(), 2026)
+        result = build_leave_summary(classified, self._employees(), 2026, month=1)
         assert result["Κανονική Άδεια από Τρέχον Έτος"].iloc[0] == 1
         assert result["Υπόλοιπο Τρέχοντος Έτους Μετά"].iloc[0] == 24
 
@@ -279,9 +279,17 @@ class TestBuildLeaveSummary:
             "Τύπος Απουσίας": "Κανονική άδεια",
             "Έτος Άδειας": 2025,
         }])
-        result = build_leave_summary(classified, self._employees(), 2026)
+        result = build_leave_summary(classified, self._employees(), 2026, month=1)
         assert result["Κανονική Άδεια από Προηγούμενο Έτος"].iloc[0] == 1
         assert result["Υπόλοιπο Προηγούμενου Έτους Μετά"].iloc[0] == 4
+
+    def test_previous_year_balance_expires_after_march(self):
+        result = build_leave_summary(pd.DataFrame(), self._employees(), 2026, month=4)
+        assert result["Υπόλοιπο Προηγούμενου Έτους Μετά"].iloc[0] == 0
+
+    def test_previous_year_balance_valid_in_march(self):
+        result = build_leave_summary(pd.DataFrame(), self._employees(), 2026, month=3)
+        assert result["Υπόλοιπο Προηγούμενου Έτους Μετά"].iloc[0] == 5
 
     def test_balance_cannot_go_negative(self):
         classified = pd.DataFrame([{
@@ -293,7 +301,7 @@ class TestBuildLeaveSummary:
             "Τύπος Απουσίας": "Κανονική άδεια",
             "Έτος Άδειας": 2025,
         } for d in range(1, 12)])  # 11 μέρες, υπόλοιπο μόνο 5
-        result = build_leave_summary(classified, self._employees(), 2026)
+        result = build_leave_summary(classified, self._employees(), 2026, month=1)
         assert result["Υπόλοιπο Προηγούμενου Έτους Μετά"].iloc[0] == 0
 
     def test_sick_leave_counted(self):

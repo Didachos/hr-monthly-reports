@@ -592,7 +592,8 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int):
 def build_leave_summary(
     classified: pd.DataFrame,
     employees: pd.DataFrame,
-    year: int
+    year: int,
+    month: int = 12,
 ) -> pd.DataFrame:
     result = employees.copy()
     prev = year - 1
@@ -637,6 +638,10 @@ def build_leave_summary(
         result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] -
         result["Κανονική Άδεια από Τρέχον Έτος"]
     ).clip(lower=0)
+
+    # Μετά τον Μάρτιο, το υπόλοιπο προηγούμενου έτους χάνεται
+    if month > 3:
+        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = 0
 
     result = result[
         [
@@ -1270,7 +1275,7 @@ def main():
 
     workdays = calculate_work_days(df, year, month)
     overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
-    leaves = build_leave_summary(classified, employees, year)
+    leaves = build_leave_summary(classified, employees, year, month)
 
     alerts = build_alerts_report(
         employees=employees,
