@@ -445,7 +445,6 @@ def find_absences(
 
     absences = merged[merged["present"].isna()].copy()
     absences["Κατάσταση"] = "ΑΠΩΝ"
-
     result = absences[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία", "Κατάσταση"]
     ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ", "Ημ/νία"]).reset_index(drop=True)
@@ -589,6 +588,9 @@ def build_leave_summary(
 ) -> pd.DataFrame:
     result = employees.copy()
     prev = year - 1
+
+    if classified.empty:
+        classified = pd.DataFrame(columns=["ΑΦΜ", "Τύπος Απουσίας", "Έτος Άδειας"])
 
     annual_prev = classified[
         (classified["Τύπος Απουσίας"] == "Κανονική άδεια") &
@@ -1286,13 +1288,8 @@ def main():
         validation.to_excel(writer, sheet_name="Validation", index=False)
         alerts.to_excel(writer, sheet_name="Alerts", index=False)
 
-        force_text_column(writer.sheets["Απουσίες"], "ΑΦΜ")
-        force_text_column(writer.sheets["Ημέρες"], "ΑΦΜ")
-        force_text_column(writer.sheets["Υπερωρίες"], "ΑΦΜ")
-        force_text_column(writer.sheets["Σύνολο Extra"], "ΑΦΜ")
-        force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
-        force_text_column(writer.sheets["Validation"], "ΑΦΜ")
-        force_text_column(writer.sheets["Alerts"], "ΑΦΜ")
+        for sheet in writer.sheets.values():
+            force_text_column(sheet, "ΑΦΜ")
 
     print("Έτοιμο:", output)
     print("Template αδειών:", classified_file)
