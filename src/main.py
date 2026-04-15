@@ -759,7 +759,7 @@ def write_ergani_exports_by_branch(
 
         branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
 
-        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+        with pd.ExcelWriter(file_path, engine="openpyxl", datetime_format="DD/MM/YYYY") as writer:
             branch_out.to_excel(writer, sheet_name="Άδειες", index=False)
             force_text_column(writer.sheets["Άδειες"], "ΑΦΜ")
 
