@@ -1224,8 +1224,26 @@ def main():
 
     root = Path(__file__).resolve().parent.parent
 
-    raw = root / "data/input/raw_attendance.xlsx"
     employees_file = root / "data/input/employees.xlsx"
+
+    input_dir = root / "data/input"
+    candidates = [
+        f for f in input_dir.glob("*.xlsx")
+        if f.name != employees_file.name
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"Δεν βρέθηκε αρχείο attendance στο {input_dir}. "
+            "Βάλε το αρχείο εκεί και ξανατρέξε."
+        )
+    if len(candidates) > 1:
+        names = [f.name for f in candidates]
+        raise ValueError(
+            f"Βρέθηκαν πολλά αρχεία στο {input_dir}: {names}. "
+            "Κράτα μόνο ένα αρχείο attendance."
+        )
+    raw = candidates[0]
+    print(f"Αρχείο attendance: {raw.name}")
     classified_file = root / f"data/output/classified_absences_{year}_{month:02d}.xlsx"
     output = root / f"data/output/monthly_report_{year}_{month:02d}.xlsx"
     ergani_output_dir = root / "data/output"
