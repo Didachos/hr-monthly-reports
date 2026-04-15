@@ -1236,7 +1236,9 @@ def main():
 
     absences = find_absences(df, employees, year, month)
 
-    if not classified_file.exists():
+    classified_existed = classified_file.exists()
+
+    if not classified_existed:
         template = build_classified_absence_template(absences)
         classified_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1308,6 +1310,13 @@ def main():
             print("-", file_path)
     else:
         print("Δεν δημιουργήθηκαν αρχεία Ergani export (δεν υπάρχουν συμπληρωμένες ταξινομημένες άδειες).")
+
+    if classified_existed:
+        archive_dir = root / "data/archive/raw"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = archive_dir / f"raw_attendance_{year}_{month:02d}.xlsx"
+        raw.rename(archive_path)
+        print("Αρχειοθετήθηκε:", archive_path)
 
 
 if __name__ == "__main__":
