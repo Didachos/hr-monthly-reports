@@ -1,3 +1,13 @@
+# Data - δεν ανεβαίνουν ποτέ στο GitHub
+data/input/*.xlsx
+data/output/*.xlsx
+data/archive/**/*.xlsx
+~$*.xlsx
+
+# macOS
+.DS_Store
+data/**/.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
