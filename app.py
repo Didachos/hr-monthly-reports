@@ -131,25 +131,29 @@ with st.sidebar:
     else:
         flow = st.session_state.get("od_flow")
         if flow:
-            st.warning("Απαιτείται σύνδεση")
-            st.markdown(f"1. Πήγαινε στο [microsoft.com/devicelogin](https://microsoft.com/devicelogin)")
-            st.code(flow["user_code"], language=None)
-            st.caption("Εισήγαγε τον κωδικό παραπάνω και συνδέσου με τον Microsoft λογαριασμό σου.")
-            if st.button("✅ Έγινε σύνδεση"):
-                result = od.complete_device_flow(
-                    st.session_state["od_app"],
-                    flow,
-                )
-                if "access_token" in result:
-                    st.session_state["od_token"] = result["access_token"]
-                    new_cache = st.session_state["od_cache"].serialize()
-                    st.session_state["od_cache"] = new_cache
-                    st.success("Συνδέθηκες!")
-                    st.info("Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
-                    st.code(new_cache)
-                    st.rerun()
-                else:
-                    st.error("Αποτυχία σύνδεσης. Δοκίμασε ξανά.")
+            if "error" in flow:
+                st.error(f"Σφάλμα Azure: {flow.get('error_description', flow.get('error'))}")
+                st.caption("Βεβαιώσου ότι το Azure app έχει Files.ReadWrite permission και έχεις κάνει 'Grant admin consent'.")
+            elif "user_code" in flow:
+                st.warning("Απαιτείται σύνδεση")
+                st.markdown("1. Πήγαινε στο [microsoft.com/devicelogin](https://microsoft.com/devicelogin)")
+                st.code(flow["user_code"], language=None)
+                st.caption("Εισήγαγε τον κωδικό παραπάνω και συνδέσου με τον Microsoft λογαριασμό σου.")
+                if st.button("✅ Έγινε σύνδεση"):
+                    result = od.complete_device_flow(
+                        st.session_state["od_app"],
+                        flow,
+                    )
+                    if "access_token" in result:
+                        st.session_state["od_token"] = result["access_token"]
+                        new_cache = st.session_state["od_cache"].serialize()
+                        st.session_state["od_cache"] = new_cache
+                        st.success("Συνδέθηκες!")
+                        st.info("Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
+                        st.code(new_cache)
+                        st.rerun()
+                    else:
+                        st.error("Αποτυχία σύνδεσης. Δοκίμασε ξανά.")
         else:
             st.info("Δεν έχουν οριστεί OneDrive credentials.")
 
