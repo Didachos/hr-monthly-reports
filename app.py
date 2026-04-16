@@ -8,6 +8,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
+import onedrive as od
 from main import (
     build_alerts_report,
     build_classified_absence_template,
@@ -82,11 +83,75 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
+# ONEDRIVE AUTH
+# =========================
+
+def init_onedrive():
+    """Αρχικοποιεί OneDrive auth από secrets. Επιστρέφει token ή None."""
+    try:
+        cfg = st.secrets["onedrive"]
+        client_id = cfg["client_id"]
+        tenant_id = cfg["tenant_id"]
+        token_cache_str = cfg.get("token_cache", "")
+
+        app, cache = od.build_app(client_id, tenant_id, token_cache_str or None)
+        token, new_cache = od.get_token_silent(app, cache)
+
+        if token:
+            st.session_state["od_token"] = token
+            st.session_state["od_app"] = app
+            st.session_state["od_cache"] = new_cache
+            return token
+
+        # Δεν υπάρχει token — ξεκίνα device flow
+        if "od_flow" not in st.session_state:
+            st.session_state["od_app"] = app
+            st.session_state["od_cache"] = cache
+            st.session_state["od_flow"] = od.start_device_flow(app)
+
+        return None
+    except Exception:
+        return None
+
+
+# =========================
 # UI
 # =========================
 
 st.set_page_config(page_title="Εργάνη - Απουσίες", page_icon="📋", layout="wide")
 st.title("📋 Εργάνη — Διαχείριση Απουσιών")
+
+# --- OneDrive sidebar ---
+with st.sidebar:
+    st.subheader("☁️ OneDrive")
+    od_token = st.session_state.get("od_token") or init_onedrive()
+
+    if od_token:
+        st.success("Συνδεδεμένο")
+    else:
+        flow = st.session_state.get("od_flow")
+        if flow:
+            st.warning("Απαιτείται σύνδεση")
+            st.markdown(f"1. Πήγαινε στο [microsoft.com/devicelogin](https://microsoft.com/devicelogin)")
+            st.code(flow["user_code"], language=None)
+            st.caption("Εισήγαγε τον κωδικό παραπάνω και συνδέσου με τον Microsoft λογαριασμό σου.")
+            if st.button("✅ Έγινε σύνδεση"):
+                result = od.complete_device_flow(
+                    st.session_state["od_app"],
+                    flow,
+                )
+                if "access_token" in result:
+                    st.session_state["od_token"] = result["access_token"]
+                    new_cache = st.session_state["od_cache"].serialize()
+                    st.session_state["od_cache"] = new_cache
+                    st.success("Συνδέθηκες!")
+                    st.info("Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
+                    st.code(new_cache)
+                    st.rerun()
+                else:
+                    st.error("Αποτυχία σύνδεσης. Δοκίμασε ξανά.")
+        else:
+            st.info("Δεν έχουν οριστεί OneDrive credentials.")
 
 tab_run, tab_history, tab_balances = st.tabs(["▶ Εκτέλεση", "📁 Ιστορικό", "📊 Υπόλοιπα Αδειών"])
 
@@ -206,6 +271,21 @@ with tab_run:
                 st.session_state["leaves_month"] = month
                 st.session_state["leaves_year"] = year
 
+                # Auto-save στο OneDrive αν είναι συνδεδεμένο
+                od_token = st.session_state.get("od_token")
+                if od_token and classified_file:
+                    try:
+                        with st.spinner("Αποθήκευση στο OneDrive..."):
+                            od.upload_file(od_token, f"monthly_report_{year}_{month:02d}.xlsx", report_bytes)
+                            if not ergani_df.empty:
+                                for branch_value, branch_df in ergani_df.groupby("ΑΑ Παραρτηματος", dropna=False):
+                                    branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
+                                    branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
+                                    od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", excel_bytes({"Άδειες": branch_out}))
+                        st.success("✅ Αποθηκεύτηκε στο OneDrive!")
+                    except Exception as e:
+                        st.warning(f"⚠️ Δεν ήταν δυνατή η αποθήκευση στο OneDrive: {e}")
+
         except Exception as e:
             st.error(f"Σφάλμα: {e}")
 
@@ -217,46 +297,84 @@ with tab_run:
 with tab_history:
     st.subheader("Παλαιότερα Αρχεία")
 
-    if not OUTPUT_DIR.exists():
-        st.info("Δεν βρέθηκε φάκελος output. Τρέξε πρώτα το script τουλάχιστον μία φορά.")
+    od_token = st.session_state.get("od_token")
+
+    if od_token:
+        # Φόρτωσε από OneDrive
+        try:
+            files = od.list_files(od_token, subfolder="output")
+            if not files:
+                st.info("Δεν υπάρχουν αρχεία στο OneDrive ακόμα.")
+            else:
+                # Ομαδοποίηση ανά περίοδο
+                periods = sorted(
+                    set(
+                        "_".join(f["name"].replace(".xlsx", "").split("_")[-2:])
+                        for f in files
+                        if f["name"].endswith(".xlsx")
+                    ),
+                    reverse=True,
+                )
+                for period in periods:
+                    try:
+                        y, m = period.split("_")
+                        label = f"{MONTHS[int(m)]} {y}"
+                    except Exception:
+                        label = period
+
+                    period_files = [f for f in files if period in f["name"]]
+                    with st.expander(f"📅 {label}"):
+                        for f in period_files:
+                            try:
+                                content = od.download_file(od_token, f["name"])
+                                st.download_button(
+                                    label=f"⬇ {f['name']}",
+                                    data=content,
+                                    file_name=f["name"],
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"od_{f['name']}",
+                                )
+                            except Exception as e:
+                                st.warning(f"Δεν ήταν δυνατή η λήψη του {f['name']}: {e}")
+        except Exception as e:
+            st.error(f"Σφάλμα φόρτωσης από OneDrive: {e}")
     else:
-        reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
-        classified_files = sorted(OUTPUT_DIR.glob("classified_absences_*.xlsx"), reverse=True)
-        ergani_files = sorted(OUTPUT_DIR.glob("ergani_export_*.xlsx"), reverse=True)
-
-        if not reports and not classified_files and not ergani_files:
-            st.info("Δεν υπάρχουν αρχεία ακόμα.")
+        # Fallback: τοπικά αρχεία
+        if not OUTPUT_DIR.exists():
+            st.info("Δεν βρέθηκε φάκελος output. Σύνδεσε το OneDrive ή τρέξε τοπικά.")
         else:
-            # Ομαδοποίηση ανά περίοδο (YYYY_MM)
-            periods = sorted(
-                set(
-                    "_".join(f.stem.split("_")[-2:])
-                    for f in [*reports, *classified_files, *ergani_files]
-                    if len(f.stem.split("_")) >= 2
-                ),
-                reverse=True,
-            )
+            reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
+            ergani_files = sorted(OUTPUT_DIR.glob("ergani_export_*.xlsx"), reverse=True)
+            all_files = [*reports, *ergani_files]
 
-            for period in periods:
-                try:
-                    y, m = period.split("_")
-                    label = f"{MONTHS[int(m)]} {y}"
-                except Exception:
-                    label = period
+            if not all_files:
+                st.info("Δεν υπάρχουν αρχεία ακόμα.")
+            else:
+                periods = sorted(
+                    set(
+                        "_".join(f.stem.split("_")[-2:])
+                        for f in all_files
+                        if len(f.stem.split("_")) >= 2
+                    ),
+                    reverse=True,
+                )
+                for period in periods:
+                    try:
+                        y, m = period.split("_")
+                        label = f"{MONTHS[int(m)]} {y}"
+                    except Exception:
+                        label = period
 
-                with st.expander(f"📅 {label}"):
-                    period_reports = [f for f in reports if f.stem.endswith(period)]
-                    period_classified = [f for f in classified_files if f.stem.endswith(period)]
-                    period_ergani = [f for f in ergani_files if period in f.stem]
-
-                    for f in [*period_reports, *period_classified, *period_ergani]:
-                        st.download_button(
-                            label=f"⬇ {f.name}",
-                            data=f.read_bytes(),
-                            file_name=f.name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=str(f),
-                        )
+                    with st.expander(f"📅 {label}"):
+                        for f in [*reports, *ergani_files]:
+                            if period in f.stem:
+                                st.download_button(
+                                    label=f"⬇ {f.name}",
+                                    data=f.read_bytes(),
+                                    file_name=f.name,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=str(f),
+                                )
 
 
 # =========================
