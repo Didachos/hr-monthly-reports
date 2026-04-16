@@ -42,8 +42,11 @@ def complete_device_flow(app, flow, cache=None):
     return result
 
 
-def get_cache_str(cache) -> str:
-    return cache.serialize()
+def get_cache_str(app_or_cache) -> str:
+    """Σειριοποιεί το cache — δέχεται είτε το app object είτε το cache object."""
+    if hasattr(app_or_cache, "token_cache"):
+        return app_or_cache.token_cache.serialize()
+    return app_or_cache.serialize()
 
 
 def upload_file(token: str, filename: str, content: bytes, subfolder: str = "output"):

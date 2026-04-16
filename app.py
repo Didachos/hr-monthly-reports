@@ -174,8 +174,8 @@ with st.sidebar:
                         )
                     if "access_token" in result:
                         st.session_state["od_token"] = result["access_token"]
-                        # Αποθήκευσε το cache_str στο session_state για να φαίνεται μετά το rerun
-                        cache_str = od.get_cache_str(st.session_state["od_cache"])
+                        # Πάρε το cache κατευθείαν από το app object (είναι σίγουρα ενημερωμένο)
+                        cache_str = od.get_cache_str(st.session_state["od_app"])
                         st.session_state["od_new_cache_str"] = cache_str
                         st.rerun()
                     else:
