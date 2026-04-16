@@ -95,18 +95,27 @@ def init_onedrive():
         token_cache_str = cfg.get("token_cache", "")
 
         app, cache = od.build_app(client_id, tenant_id, token_cache_str or None)
-        token, _ = od.get_token_silent(app, cache)
 
-        if token:
-            st.session_state["od_token"] = token
-            st.session_state["od_app"] = app
-            st.session_state["od_cache"] = cache  # αποθήκευσε το cache object
-            return token
+        # Debug: πόσα accounts βρέθηκαν στο cache
+        accounts = app.get_accounts()
+        st.session_state["od_debug_accounts"] = len(accounts)
+
+        if accounts:
+            token, _ = od.get_token_silent(app, cache)
+            if token:
+                st.session_state["od_token"] = token
+                st.session_state["od_app"] = app
+                st.session_state["od_cache"] = cache
+                return token
+            # Υπάρχουν accounts αλλά το silent απέτυχε
+            st.session_state["od_debug_msg"] = "Accounts βρέθηκαν αλλά το silent token απέτυχε."
+        else:
+            st.session_state["od_debug_msg"] = "Δεν βρέθηκαν accounts στο cache."
 
         # Δεν υπάρχει token — ξεκίνα device flow μια φορά
         if "od_flow" not in st.session_state:
             st.session_state["od_app"] = app
-            st.session_state["od_cache"] = cache  # αποθήκευσε το cache object
+            st.session_state["od_cache"] = cache
             flow = od.start_device_flow(app)
             st.session_state["od_flow"] = flow
 
@@ -143,6 +152,10 @@ with st.sidebar:
         init_err = st.session_state.get("od_init_error")
         if init_err:
             st.error(f"Σφάλμα αρχικοποίησης: {init_err}")
+        debug_msg = st.session_state.get("od_debug_msg")
+        debug_accounts = st.session_state.get("od_debug_accounts", -1)
+        if debug_msg:
+            st.caption(f"🔍 {debug_msg} (accounts στο cache: {debug_accounts})")
         flow = st.session_state.get("od_flow")
         if flow:
             if "error" in flow:
