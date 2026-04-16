@@ -466,16 +466,37 @@ with tab_balances:
     # Από την τελευταία εκτέλεση (session) ή από το τελευταίο αποθηκευμένο report
     leaves_df = st.session_state.get("leaves")
     leaves_month = st.session_state.get("leaves_month", 12)
+    leaves_year = st.session_state.get("leaves_year", "")
 
     if leaves_df is None:
-        # Φόρτωσε από το πιο πρόσφατο monthly report
+        od_token = st.session_state.get("od_token")
+        if od_token:
+            # Φόρτωσε το πιο πρόσφατο monthly report από OneDrive
+            try:
+                files = od.list_files(od_token, subfolder="output")
+                report_files = sorted(
+                    [f["name"] for f in files if f["name"].startswith("monthly_report_") and f["name"].endswith(".xlsx")],
+                    reverse=True,
+                )
+                if report_files:
+                    latest_name = report_files[0]
+                    content = od.download_file(od_token, latest_name, subfolder="output")
+                    leaves_df = pd.read_excel(io.BytesIO(content), sheet_name="Άδειες")
+                    parts = latest_name.replace(".xlsx", "").split("_")
+                    leaves_month = int(parts[-1])
+                    leaves_year = int(parts[-2])
+                    st.caption(f"📂 Από OneDrive: {latest_name}")
+            except Exception:
+                pass
+
+    if leaves_df is None:
+        # Fallback: τοπικά αρχεία
         if OUTPUT_DIR.exists():
             reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
             if reports:
                 latest = reports[0]
                 try:
                     leaves_df = pd.read_excel(latest, sheet_name="Άδειες")
-                    # Εξαγωγή έτους/μήνα από το όνομα αρχείου (monthly_report_YYYY_MM.xlsx)
                     parts = latest.stem.split("_")
                     leaves_month = int(parts[-1])
                     leaves_year = int(parts[-2])
@@ -496,7 +517,6 @@ with tab_balances:
             return ""
 
         # Τρέχον έτος
-        leaves_year = st.session_state.get("leaves_year", "")
         st.subheader(f"📅 Τρέχον Έτος{f' {leaves_year}' if leaves_year else ''}")
         curr_table = leave_balance_table_current(leaves_df)
         st.dataframe(
