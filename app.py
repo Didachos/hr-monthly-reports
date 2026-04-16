@@ -146,6 +146,15 @@ with st.sidebar:
 
     if od_token:
         st.success("Συνδεδεμένο ✅")
+
+        # Ανανέωση token cache (για χρήση όταν πλησιάζει λήξη ~90 μέρες)
+        if st.button("🔄 Ανανέωση σύνδεσης"):
+            st.session_state.pop("od_token", None)
+            st.session_state.pop("od_flow", None)
+            st.session_state.pop("od_app", None)
+            st.session_state.pop("od_cache", None)
+            st.rerun()
+
         # Αν μόλις συνδέθηκε, δείξε το token_cache για αποθήκευση στα secrets
         new_cache_str = st.session_state.get("od_new_cache_str")
         if new_cache_str:
@@ -219,6 +228,18 @@ with tab_run:
     )
 
     st.divider()
+
+    # Έλεγχος αν υπάρχει ήδη report για τον μήνα
+    od_token_check = st.session_state.get("od_token")
+    if od_token_check:
+        try:
+            existing = od.list_files(od_token_check, subfolder="output")
+            exists = any(f["name"] == f"monthly_report_{year}_{month:02d}.xlsx" for f in existing)
+            if exists:
+                st.warning(f"⚠️ Υπάρχει ήδη report για {MONTHS[month]} {year} στο OneDrive. Αν συνεχίσεις θα αντικατασταθεί.")
+        except Exception:
+            pass
+
     run = st.button("▶ Εκτέλεση", type="primary", disabled=not (raw_file and employees_file))
 
     if run:
@@ -385,11 +406,15 @@ with tab_history:
             if not files:
                 st.info("Δεν υπάρχουν αρχεία στο OneDrive ακόμα.")
             else:
-                # Ομαδοποίηση ανά περίοδο
+                # Φόρτωσε και raw αρχεία
+                raw_files = od.list_files(od_token, subfolder="raw")
+
+                # Ομαδοποίηση ανά περίοδο (output + raw)
+                all_od_files = files + raw_files
                 periods = sorted(
                     set(
                         "_".join(f["name"].replace(".xlsx", "").split("_")[-2:])
-                        for f in files
+                        for f in all_od_files
                         if f["name"].endswith(".xlsx")
                     ),
                     reverse=True,
@@ -401,20 +426,38 @@ with tab_history:
                     except Exception:
                         label = period
 
-                    period_files = [f for f in files if period in f["name"]]
+                    period_output = [f for f in files if period in f["name"]]
+                    period_raw = [f for f in raw_files if period in f["name"]]
+
                     with st.expander(f"📅 {label}"):
-                        for f in period_files:
-                            try:
-                                content = od.download_file(od_token, f["name"])
-                                st.download_button(
-                                    label=f"⬇ {f['name']}",
-                                    data=content,
-                                    file_name=f["name"],
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"od_{f['name']}",
-                                )
-                            except Exception as e:
-                                st.warning(f"Δεν ήταν δυνατή η λήψη του {f['name']}: {e}")
+                        if period_output:
+                            st.caption("📊 Reports")
+                            for f in period_output:
+                                try:
+                                    content = od.download_file(od_token, f["name"], subfolder="output")
+                                    st.download_button(
+                                        label=f"⬇ {f['name']}",
+                                        data=content,
+                                        file_name=f["name"],
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key=f"od_{f['name']}",
+                                    )
+                                except Exception as e:
+                                    st.warning(f"Δεν ήταν δυνατή η λήψη του {f['name']}: {e}")
+                        if period_raw:
+                            st.caption("📁 Raw Attendance")
+                            for f in period_raw:
+                                try:
+                                    content = od.download_file(od_token, f["name"], subfolder="raw")
+                                    st.download_button(
+                                        label=f"⬇ {f['name']}",
+                                        data=content,
+                                        file_name=f["name"],
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key=f"od_raw_{f['name']}",
+                                    )
+                                except Exception as e:
+                                    st.warning(f"Δεν ήταν δυνατή η λήψη του {f['name']}: {e}")
         except Exception as e:
             st.error(f"Σφάλμα φόρτωσης από OneDrive: {e}")
     else:
