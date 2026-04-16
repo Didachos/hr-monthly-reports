@@ -95,22 +95,24 @@ def init_onedrive():
         token_cache_str = cfg.get("token_cache", "")
 
         app, cache = od.build_app(client_id, tenant_id, token_cache_str or None)
-        token, new_cache = od.get_token_silent(app, cache)
+        token, _ = od.get_token_silent(app, cache)
 
         if token:
             st.session_state["od_token"] = token
             st.session_state["od_app"] = app
-            st.session_state["od_cache"] = new_cache
+            st.session_state["od_cache"] = cache  # αποθήκευσε το cache object
             return token
 
-        # Δεν υπάρχει token — ξεκίνα device flow
+        # Δεν υπάρχει token — ξεκίνα device flow μια φορά
         if "od_flow" not in st.session_state:
             st.session_state["od_app"] = app
-            st.session_state["od_cache"] = cache
-            st.session_state["od_flow"] = od.start_device_flow(app)
+            st.session_state["od_cache"] = cache  # αποθήκευσε το cache object
+            flow = od.start_device_flow(app)
+            st.session_state["od_flow"] = flow
 
         return None
-    except Exception:
+    except Exception as e:
+        st.session_state["od_init_error"] = str(e)
         return None
 
 
@@ -127,8 +129,11 @@ with st.sidebar:
     od_token = st.session_state.get("od_token") or init_onedrive()
 
     if od_token:
-        st.success("Συνδεδεμένο")
+        st.success("Συνδεδεμένο ✅")
     else:
+        init_err = st.session_state.get("od_init_error")
+        if init_err:
+            st.error(f"Σφάλμα αρχικοποίησης: {init_err}")
         flow = st.session_state.get("od_flow")
         if flow:
             if "error" in flow:
@@ -140,20 +145,24 @@ with st.sidebar:
                 st.code(flow["user_code"], language=None)
                 st.caption("Εισήγαγε τον κωδικό παραπάνω και συνδέσου με τον Microsoft λογαριασμό σου.")
                 if st.button("✅ Έγινε σύνδεση"):
-                    result = od.complete_device_flow(
-                        st.session_state["od_app"],
-                        flow,
-                    )
+                    with st.spinner("Αναμονή επιβεβαίωσης από Microsoft..."):
+                        result = od.complete_device_flow(
+                            st.session_state["od_app"],
+                            flow,
+                        )
                     if "access_token" in result:
                         st.session_state["od_token"] = result["access_token"]
-                        new_cache = st.session_state["od_cache"].serialize()
-                        st.session_state["od_cache"] = new_cache
-                        st.success("Συνδέθηκες!")
+                        # Σειριοποίησε το ενημερωμένο cache για αποθήκευση στα secrets
+                        cache_str = od.get_cache_str(st.session_state["od_cache"])
+                        st.success("Συνδέθηκες! 🎉")
                         st.info("Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
-                        st.code(new_cache)
+                        st.code(cache_str)
+                        st.caption("Μετά από αυτό η σύνδεση θα γίνεται αυτόματα.")
                         st.rerun()
                     else:
-                        st.error("Αποτυχία σύνδεσης. Δοκίμασε ξανά.")
+                        err = result.get("error_description") or result.get("error") or str(result)
+                        st.error(f"Αποτυχία σύνδεσης: {err}")
+                        st.caption("Δοκίμασε να ανανεώσεις τη σελίδα για νέο κωδικό.")
         else:
             st.info("Δεν έχουν οριστεί OneDrive credentials.")
 
