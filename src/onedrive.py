@@ -34,8 +34,16 @@ def start_device_flow(app):
     return app.initiate_device_flow(scopes=SCOPES)
 
 
-def complete_device_flow(app, flow):
-    return app.acquire_token_by_device_flow(flow)
+def complete_device_flow(app, flow, cache=None):
+    result = app.acquire_token_by_device_flow(flow)
+    if cache and "access_token" in result:
+        # Το MSAL ενημερώνει το cache αυτόματα — σειριοποιούμε εδώ
+        _ = cache.serialize()
+    return result
+
+
+def get_cache_str(cache) -> str:
+    return cache.serialize()
 
 
 def upload_file(token: str, filename: str, content: bytes, subfolder: str = "output"):
