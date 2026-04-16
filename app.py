@@ -1,4 +1,5 @@
 import base64
+import datetime
 import io
 import sys
 import tempfile
@@ -137,6 +138,35 @@ def init_onedrive():
 # =========================
 
 st.set_page_config(page_title="Εργάνη - Απουσίες", page_icon="📋", layout="wide")
+
+# =========================
+# PASSWORD PROTECTION
+# =========================
+
+def check_password() -> bool:
+    try:
+        correct = st.secrets["app"]["password"]
+    except Exception:
+        return True  # Αν δεν υπάρχει password στα secrets, επέτρεψε πρόσβαση
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    with st.form("login"):
+        st.subheader("🔐 Σύνδεση")
+        pwd = st.text_input("Κωδικός", type="password")
+        submitted = st.form_submit_button("Είσοδος")
+        if submitted:
+            if pwd == correct:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Λάθος κωδικός.")
+    return False
+
+if not check_password():
+    st.stop()
+
 st.title("📋 Εργάνη — Διαχείριση Απουσιών")
 
 # --- OneDrive sidebar ---
@@ -210,11 +240,16 @@ tab_run, tab_history, tab_balances = st.tabs(["▶ Εκτέλεση", "📁 Ισ
 
 with tab_run:
     st.subheader("Περίοδος")
+    _today = datetime.date.today()
+    # Default: προηγούμενος μήνας (γιατί συνήθως επεξεργαζόμαστε τον περασμένο μήνα)
+    _default_month = _today.month - 1 if _today.month > 1 else 12
+    _default_year = _today.year if _today.month > 1 else _today.year - 1
+
     col1, col2 = st.columns(2)
     with col1:
-        year = st.number_input("Έτος", min_value=2020, max_value=2100, value=2026, step=1)
+        year = st.number_input("Έτος", min_value=2020, max_value=2100, value=_default_year, step=1)
     with col2:
-        month = st.selectbox("Μήνας", options=list(MONTHS.keys()), format_func=lambda m: MONTHS[m])
+        month = st.selectbox("Μήνας", options=list(MONTHS.keys()), format_func=lambda m: MONTHS[m], index=_default_month - 1)
 
     st.subheader("Αρχεία Εισόδου")
     raw_file = st.file_uploader("Αρχείο παρουσίας (.xlsx)", type=["xlsx"])
@@ -222,10 +257,31 @@ with tab_run:
 
     st.subheader("Ταξινόμηση Απουσιών (προαιρετικό)")
     st.caption("Αν έχεις ήδη συμπληρώσει το classified_absences, ανέβασέ το εδώ για να παραχθεί το πλήρες report.")
-    classified_file = st.file_uploader(
-        f"classified_absences_{year}_{month:02d}.xlsx",
-        type=["xlsx"],
-    )
+
+    classified_file = None
+    classified_bytes = None
+
+    # Φόρτωση classified από OneDrive αν υπάρχει
+    od_token_cls = st.session_state.get("od_token")
+    cls_filename = f"classified_absences_{year}_{month:02d}.xlsx"
+    if od_token_cls:
+        try:
+            od_files = od.list_files(od_token_cls, subfolder="output")
+            if any(f["name"] == cls_filename for f in od_files):
+                st.info(f"☁️ Βρέθηκε `{cls_filename}` στο OneDrive.")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("✅ Χρησιμοποίησε από OneDrive"):
+                        classified_bytes = od.download_file(od_token_cls, cls_filename, subfolder="output")
+                        st.success("Φορτώθηκε από OneDrive!")
+                with col_b:
+                    classified_file = st.file_uploader("Ή ανέβασε νέο αρχείο", type=["xlsx"], key="cls_upload")
+            else:
+                classified_file = st.file_uploader(cls_filename, type=["xlsx"], key="cls_upload")
+        except Exception:
+            classified_file = st.file_uploader(cls_filename, type=["xlsx"], key="cls_upload")
+    else:
+        classified_file = st.file_uploader(cls_filename, type=["xlsx"], key="cls_upload")
 
     st.divider()
 
@@ -256,7 +312,12 @@ with tab_run:
                 workdays = calculate_work_days(df, year, month)
                 overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
 
-                if classified_file:
+                if classified_bytes:
+                    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                    tmp.write(classified_bytes)
+                    tmp.close()
+                    classified = load_classified_absences(Path(tmp.name))
+                elif classified_file:
                     cls_path = save_upload_to_temp(classified_file)
                     classified = load_classified_absences(cls_path)
                 else:
@@ -287,7 +348,7 @@ with tab_run:
 
             st.subheader("Λήψη Αρχείων")
 
-            if not classified_file:
+            if not classified_file and not classified_bytes:
                 template = build_classified_absence_template(absences)
                 template_bytes = excel_bytes({"Sheet1": template})
                 st.info("Κατέβασε το template, συμπλήρωσε τις στήλες 'Τύπος Απουσίας' και 'Έτος Άδειας', και ανέβασέ το ξανά.")
@@ -333,7 +394,7 @@ with tab_run:
 
                 # Auto-save στο OneDrive αν είναι συνδεδεμένο
                 od_token = st.session_state.get("od_token")
-                if od_token and classified_file:
+                if od_token and (classified_file or classified_bytes):
                     try:
                         with st.spinner("Αποθήκευση στο OneDrive..."):
                             # Αποθήκευση raw attendance στο OneDrive (subfolder: raw)
