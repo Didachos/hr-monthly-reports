@@ -95,6 +95,9 @@ def init_onedrive():
         tenant_id = cfg["tenant_id"]
         token_cache_raw = cfg.get("token_cache", "")
 
+        # Debug: δείξε τα keys που υπάρχουν στο secrets
+        st.session_state["od_debug_keys"] = list(cfg.keys())
+
         # Αποκωδικοποίηση base64 αν χρειάζεται
         if token_cache_raw:
             try:
@@ -170,8 +173,11 @@ with st.sidebar:
         debug_msg = st.session_state.get("od_debug_msg")
         debug_accounts = st.session_state.get("od_debug_accounts", -1)
         debug_cache_len = st.session_state.get("od_debug_cache_len", -1)
+        debug_keys = st.session_state.get("od_debug_keys", [])
         if debug_msg:
             st.caption(f"🔍 {debug_msg} (accounts: {debug_accounts}, token_cache από secrets: {debug_cache_len} bytes)")
+        if debug_keys:
+            st.caption(f"🗝 Keys στο [onedrive]: {debug_keys}")
         flow = st.session_state.get("od_flow")
         if flow:
             if "error" in flow:
