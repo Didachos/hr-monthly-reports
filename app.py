@@ -94,6 +94,9 @@ def init_onedrive():
         tenant_id = cfg["tenant_id"]
         token_cache_str = cfg.get("token_cache", "")
 
+        # Debug: τι διαβάζουμε από τα secrets
+        st.session_state["od_debug_cache_len"] = len(token_cache_str) if token_cache_str else 0
+
         app, cache = od.build_app(client_id, tenant_id, token_cache_str or None)
 
         # Debug: πόσα accounts βρέθηκαν στο cache
@@ -156,8 +159,9 @@ with st.sidebar:
             st.error(f"Σφάλμα αρχικοποίησης: {init_err}")
         debug_msg = st.session_state.get("od_debug_msg")
         debug_accounts = st.session_state.get("od_debug_accounts", -1)
+        debug_cache_len = st.session_state.get("od_debug_cache_len", -1)
         if debug_msg:
-            st.caption(f"🔍 {debug_msg} (accounts στο cache: {debug_accounts})")
+            st.caption(f"🔍 {debug_msg} (accounts: {debug_accounts}, token_cache από secrets: {debug_cache_len} bytes)")
         flow = st.session_state.get("od_flow")
         if flow:
             if "error" in flow:
