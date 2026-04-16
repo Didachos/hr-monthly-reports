@@ -1327,6 +1327,37 @@ def main():
     print("Έτοιμο:", output)
     print("Template αδειών:", classified_file)
 
+    # --- Εκτύπωση validation στο terminal ---
+    errors = validation[validation["Επίπεδο"] == "ERROR"]
+    warnings = validation[validation["Επίπεδο"] == "WARNING"]
+
+    if not errors.empty:
+        print(f"\n🔴 ΣΦΑΛΜΑΤΑ ({len(errors)}):")
+        for _, r in errors.iterrows():
+            parts = [r["Κατηγορία"], r["Μήνυμα"]]
+            if r["ΑΦΜ"]:
+                parts.append(f"ΑΦΜ: {r['ΑΦΜ']}")
+            if r["Επώνυμο"]:
+                parts.append(f"{r['Επώνυμο']} {r['Όνομα']}")
+            if r["Ημ/νία"]:
+                parts.append(str(r["Ημ/νία"]))
+            print("  ✗", " | ".join(parts))
+
+    if not warnings.empty:
+        print(f"\n🟡 ΠΡΟΕΙΔΟΠΟΙΗΣΕΙΣ ({len(warnings)}):")
+        for _, r in warnings.iterrows():
+            parts = [r["Κατηγορία"], r["Μήνυμα"]]
+            if r["ΑΦΜ"]:
+                parts.append(f"ΑΦΜ: {r['ΑΦΜ']}")
+            if r["Επώνυμο"]:
+                parts.append(f"{r['Επώνυμο']} {r['Όνομα']}")
+            if r["Ημ/νία"]:
+                parts.append(str(r["Ημ/νία"]))
+            print("  ⚠", " | ".join(parts))
+
+    if errors.empty and warnings.empty:
+        print("\n✅ Validation: δεν εντοπίστηκαν προβλήματα.")
+
     if ergani_files:
         print("Ergani export files:")
         for file_path in ergani_files:
