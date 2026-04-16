@@ -1,3 +1,4 @@
+import base64
 import io
 import sys
 import tempfile
@@ -92,7 +93,16 @@ def init_onedrive():
         cfg = st.secrets["onedrive"]
         client_id = cfg["client_id"]
         tenant_id = cfg["tenant_id"]
-        token_cache_str = cfg.get("token_cache", "")
+        token_cache_raw = cfg.get("token_cache", "")
+
+        # Αποκωδικοποίηση base64 αν χρειάζεται
+        if token_cache_raw:
+            try:
+                token_cache_str = base64.b64decode(token_cache_raw.strip()).decode("utf-8")
+            except Exception:
+                token_cache_str = token_cache_raw  # fallback: χρησιμοποίησε raw
+        else:
+            token_cache_str = ""
 
         # Debug: τι διαβάζουμε από τα secrets
         st.session_state["od_debug_cache_len"] = len(token_cache_str) if token_cache_str else 0
@@ -180,11 +190,12 @@ with st.sidebar:
                         )
                     if "access_token" in result:
                         st.session_state["od_token"] = result["access_token"]
-                        # Πάρε το cache κατευθείαν από το app object (είναι σίγουρα ενημερωμένο)
                         app_obj = st.session_state["od_app"]
-                        cache_str = od.get_cache_str(app_obj)
+                        cache_json = od.get_cache_str(app_obj)
+                        # Κωδικοποίηση σε base64 για ασφαλή αποθήκευση στο TOML
+                        cache_b64 = base64.b64encode(cache_json.encode("utf-8")).decode("ascii")
                         accounts_now = app_obj.get_accounts()
-                        st.session_state["od_new_cache_str"] = cache_str
+                        st.session_state["od_new_cache_str"] = cache_b64
                         st.session_state["od_debug_cache_accounts"] = len(accounts_now)
                         st.rerun()
                     else:
