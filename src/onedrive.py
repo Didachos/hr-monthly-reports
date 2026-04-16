@@ -10,9 +10,11 @@ def build_app(client_id: str, tenant_id: str, token_cache_str: str = None):
     cache = msal.SerializableTokenCache()
     if token_cache_str:
         cache.deserialize(token_cache_str)
+    # Χρησιμοποιούμε "common" για personal Microsoft accounts
+    authority = f"https://login.microsoftonline.com/common"
     app = msal.PublicClientApplication(
         client_id,
-        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        authority=authority,
         token_cache=cache,
     )
     return app, cache
