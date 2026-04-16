@@ -142,6 +142,8 @@ with st.sidebar:
         # Αν μόλις συνδέθηκε, δείξε το token_cache για αποθήκευση στα secrets
         new_cache_str = st.session_state.get("od_new_cache_str")
         if new_cache_str:
+            debug_accts = st.session_state.get("od_debug_cache_accounts", "?")
+            st.caption(f"🔍 Accounts μετά auth: {debug_accts} | Cache size: {len(new_cache_str)} bytes")
             st.info("📋 Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
             st.code(new_cache_str)
             st.caption("Μετά από αυτό η σύνδεση θα γίνεται αυτόματα κάθε φορά.")
@@ -175,8 +177,11 @@ with st.sidebar:
                     if "access_token" in result:
                         st.session_state["od_token"] = result["access_token"]
                         # Πάρε το cache κατευθείαν από το app object (είναι σίγουρα ενημερωμένο)
-                        cache_str = od.get_cache_str(st.session_state["od_app"])
+                        app_obj = st.session_state["od_app"]
+                        cache_str = od.get_cache_str(app_obj)
+                        accounts_now = app_obj.get_accounts()
                         st.session_state["od_new_cache_str"] = cache_str
+                        st.session_state["od_debug_cache_accounts"] = len(accounts_now)
                         st.rerun()
                     else:
                         err = result.get("error_description") or result.get("error") or str(result)
