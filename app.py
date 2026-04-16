@@ -315,13 +315,16 @@ with tab_run:
                 if od_token and classified_file:
                     try:
                         with st.spinner("Αποθήκευση στο OneDrive..."):
+                            # Αποθήκευση raw attendance στο OneDrive (subfolder: raw)
+                            od.upload_file(od_token, f"raw_attendance_{year}_{month:02d}.xlsx", raw_file.getvalue(), subfolder="raw")
+                            # Αποθήκευση monthly report
                             od.upload_file(od_token, f"monthly_report_{year}_{month:02d}.xlsx", report_bytes)
                             if not ergani_df.empty:
                                 for branch_value, branch_df in ergani_df.groupby("ΑΑ Παραρτηματος", dropna=False):
                                     branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
                                     branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
                                     od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", excel_bytes({"Άδειες": branch_out}))
-                        st.success("✅ Αποθηκεύτηκε στο OneDrive!")
+                        st.success("✅ Αποθηκεύτηκε στο OneDrive! (output + raw)")
                     except Exception as e:
                         st.warning(f"⚠️ Δεν ήταν δυνατή η αποθήκευση στο OneDrive: {e}")
 
@@ -337,6 +340,43 @@ with tab_history:
     st.subheader("Παλαιότερα Αρχεία")
 
     od_token = st.session_state.get("od_token")
+
+    # --- Upload υπαρχόντων αρχείων στο OneDrive ---
+    if od_token:
+        with st.expander("⬆ Ανέβασε υπάρχοντα αρχεία στο OneDrive"):
+            st.caption("Ανέβασε παλιά monthly reports ή raw attendance αρχεία για να τα αποθηκεύσεις στο OneDrive.")
+            upload_col1, upload_col2 = st.columns(2)
+            with upload_col1:
+                files_to_upload = st.file_uploader(
+                    "Monthly reports / Ergani exports (.xlsx)",
+                    type=["xlsx"],
+                    accept_multiple_files=True,
+                    key="manual_upload_output",
+                )
+                if files_to_upload and st.button("⬆ Ανέβασμα reports"):
+                    with st.spinner("Ανέβασμα..."):
+                        for f in files_to_upload:
+                            try:
+                                od.upload_file(od_token, f.name, f.getvalue(), subfolder="output")
+                                st.success(f"✅ {f.name}")
+                            except Exception as e:
+                                st.error(f"❌ {f.name}: {e}")
+            with upload_col2:
+                raw_files_to_upload = st.file_uploader(
+                    "Raw attendance αρχεία (.xlsx)",
+                    type=["xlsx"],
+                    accept_multiple_files=True,
+                    key="manual_upload_raw",
+                )
+                if raw_files_to_upload and st.button("⬆ Ανέβασμα raw"):
+                    with st.spinner("Ανέβασμα..."):
+                        for f in raw_files_to_upload:
+                            try:
+                                od.upload_file(od_token, f.name, f.getvalue(), subfolder="raw")
+                                st.success(f"✅ {f.name}")
+                            except Exception as e:
+                                st.error(f"❌ {f.name}: {e}")
+        st.divider()
 
     if od_token:
         # Φόρτωσε από OneDrive
