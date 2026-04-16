@@ -592,7 +592,8 @@ def calculate_overtime(df: pd.DataFrame, year: int, month: int):
 def build_leave_summary(
     classified: pd.DataFrame,
     employees: pd.DataFrame,
-    year: int
+    year: int,
+    month: int = 12,
 ) -> pd.DataFrame:
     result = employees.copy()
     prev = year - 1
@@ -637,6 +638,10 @@ def build_leave_summary(
         result["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"] -
         result["Κανονική Άδεια από Τρέχον Έτος"]
     ).clip(lower=0)
+
+    # Μετά τον Μάρτιο, το υπόλοιπο προηγούμενου έτους χάνεται
+    if month > 3:
+        result["Υπόλοιπο Προηγούμενου Έτους Μετά"] = 0
 
     result = result[
         [
@@ -1224,8 +1229,26 @@ def main():
 
     root = Path(__file__).resolve().parent.parent
 
-    raw = root / "data/input/raw_attendance.xlsx"
     employees_file = root / "data/input/employees.xlsx"
+
+    input_dir = root / "data/input"
+    candidates = [
+        f for f in input_dir.glob("*.xlsx")
+        if f.name != employees_file.name
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"Δεν βρέθηκε αρχείο attendance στο {input_dir}. "
+            "Βάλε το αρχείο εκεί και ξανατρέξε."
+        )
+    if len(candidates) > 1:
+        names = [f.name for f in candidates]
+        raise ValueError(
+            f"Βρέθηκαν πολλά αρχεία στο {input_dir}: {names}. "
+            "Κράτα μόνο ένα αρχείο attendance."
+        )
+    raw = candidates[0]
+    print(f"Αρχείο attendance: {raw.name}")
     classified_file = root / f"data/output/classified_absences_{year}_{month:02d}.xlsx"
     output = root / f"data/output/monthly_report_{year}_{month:02d}.xlsx"
     ergani_output_dir = root / "data/output"
@@ -1252,7 +1275,7 @@ def main():
 
     workdays = calculate_work_days(df, year, month)
     overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
-    leaves = build_leave_summary(classified, employees, year)
+    leaves = build_leave_summary(classified, employees, year, month)
 
     alerts = build_alerts_report(
         employees=employees,
