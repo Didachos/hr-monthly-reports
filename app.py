@@ -130,6 +130,15 @@ with st.sidebar:
 
     if od_token:
         st.success("Συνδεδεμένο ✅")
+        # Αν μόλις συνδέθηκε, δείξε το token_cache για αποθήκευση στα secrets
+        new_cache_str = st.session_state.get("od_new_cache_str")
+        if new_cache_str:
+            st.info("📋 Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
+            st.code(new_cache_str)
+            st.caption("Μετά από αυτό η σύνδεση θα γίνεται αυτόματα κάθε φορά.")
+            if st.button("✔ Το αντέγραψα"):
+                del st.session_state["od_new_cache_str"]
+                st.rerun()
     else:
         init_err = st.session_state.get("od_init_error")
         if init_err:
@@ -152,12 +161,9 @@ with st.sidebar:
                         )
                     if "access_token" in result:
                         st.session_state["od_token"] = result["access_token"]
-                        # Σειριοποίησε το ενημερωμένο cache για αποθήκευση στα secrets
+                        # Αποθήκευσε το cache_str στο session_state για να φαίνεται μετά το rerun
                         cache_str = od.get_cache_str(st.session_state["od_cache"])
-                        st.success("Συνδέθηκες! 🎉")
-                        st.info("Αντέγραψε το παρακάτω και πρόσθεσέ το στα Streamlit Secrets ως `token_cache`:")
-                        st.code(cache_str)
-                        st.caption("Μετά από αυτό η σύνδεση θα γίνεται αυτόματα.")
+                        st.session_state["od_new_cache_str"] = cache_str
                         st.rerun()
                     else:
                         err = result.get("error_description") or result.get("error") or str(result)
