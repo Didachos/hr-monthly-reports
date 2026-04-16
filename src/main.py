@@ -1222,11 +1222,34 @@ def build_alerts_report(
 
 def main():
     if len(sys.argv) != 3:
-        raise ValueError("Χρήση: python3 src/main.py <year> <month>")
+        print("❌ Λάθος χρήση.")
+        print("   Σωστή χρήση: python3 src/main.py <year> <month>")
+        print("   Παράδειγμα:  python3 src/main.py 2026 3")
+        sys.exit(1)
 
-    year = int(sys.argv[1])
-    month = int(sys.argv[2])
+    try:
+        year = int(sys.argv[1])
+        month = int(sys.argv[2])
+    except ValueError:
+        print("❌ Το έτος και ο μήνας πρέπει να είναι αριθμοί.")
+        print("   Παράδειγμα:  python3 src/main.py 2026 3")
+        sys.exit(1)
 
+    if not (1 <= month <= 12):
+        print(f"❌ Μη έγκυρος μήνας: {month}. Δώσε αριθμό από 1 έως 12.")
+        sys.exit(1)
+
+    try:
+        _run(year, month)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"\n❌ {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Απρόσμενο σφάλμα: {e}")
+        sys.exit(1)
+
+
+def _run(year: int, month: int) -> None:
     root = Path(__file__).resolve().parent.parent
 
     employees_file = root / "data/input/employees.xlsx"
