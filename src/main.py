@@ -598,6 +598,15 @@ def build_leave_summary(
     result = employees.copy()
     prev = year - 1
 
+    # Βεβαιώσου ότι οι αριθμητικές στήλες είναι numeric (μπορεί να διαβαστούν ως string από Excel)
+    for col in [
+        "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους",
+        "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους",
+        "Υπόλοιπο Προηγούμενου Έτους",
+    ]:
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0).astype(int)
+
     if classified.empty:
         classified = pd.DataFrame(columns=["ΑΦΜ", "Τύπος Απουσίας", "Έτος Άδειας"])
 
