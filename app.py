@@ -629,8 +629,8 @@ with tab_balances:
             hide_index=True,
         )
 
-        # Προηγούμενο έτος — μόνο αν είναι Q1 και υπάρχει υπόλοιπο
-        if leaves_month <= 3:
+        # Προηγούμενο έτος — Ιανουάριος έως Απρίλιος
+        if 1 <= leaves_month <= 4:
             prev_table = leave_balance_table_prev(leaves_df)
             has_prev_balance = prev_table["Υπόλοιπο"].sum() > 0
             if has_prev_balance:
@@ -639,6 +639,20 @@ with tab_balances:
                 st.caption("⚠️ Το υπόλοιπο λήγει στο τέλος Μαρτίου.")
                 st.dataframe(
                     prev_table.style.map(color_balance, subset=["Υπόλοιπο"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # Δεκέμβριος — προεπισκόπηση υπολοίπου που μεταφέρεται στο επόμενο έτος
+        if leaves_month == 12:
+            curr_table_dec = leave_balance_table_current(leaves_df)
+            carryover = curr_table_dec[curr_table_dec["Υπόλοιπο"] > 0]
+            if not carryover.empty:
+                next_year = int(leaves_year) + 1 if leaves_year else ""
+                st.subheader(f"📅 Μεταφορά υπολοίπου στο {next_year}")
+                st.caption("Οι παρακάτω εργαζόμενοι έχουν υπόλοιπο που μεταφέρεται στο νέο έτος (λήγει τέλος Μαρτίου).")
+                st.dataframe(
+                    carryover.style.map(color_balance, subset=["Υπόλοιπο"]),
                     use_container_width=True,
                     hide_index=True,
                 )
