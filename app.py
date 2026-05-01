@@ -562,6 +562,30 @@ with tab_history:
                                 st.error(f"❌ {f.name}: {e}")
         st.divider()
 
+    # --- employees.xlsx από config ---
+    if od_token:
+        try:
+            cfg_files = od.list_files(od_token, subfolder="config")
+            emp_cfg = next((f for f in cfg_files if f["name"] == "employees.xlsx"), None)
+            if emp_cfg:
+                with st.expander("👥 employees.xlsx"):
+                    emp_content = od.download_file(od_token, "employees.xlsx", subfolder="config")
+                    st.download_button(
+                        label="⬇ employees.xlsx",
+                        data=emp_content,
+                        file_name="employees.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_employees_history",
+                    )
+                    new_emp = st.file_uploader("Αντικατάσταση employees.xlsx", type=["xlsx"], key="hist_emp_upload")
+                    if new_emp and st.button("⬆ Αποθήκευση στο OneDrive", key="hist_emp_save"):
+                        od.upload_file(od_token, "employees.xlsx", new_emp.getvalue(), subfolder="config")
+                        st.session_state.pop("employees_od_bytes", None)  # invalidate cache
+                        st.success("✅ Αποθηκεύτηκε!")
+                st.divider()
+        except Exception:
+            pass
+
     if od_token:
         # Φόρτωσε από OneDrive
         try:
