@@ -341,7 +341,7 @@ class TestBuildErganiExportDf:
             "Έτος Άδειας": 2026,
         }])
         result = build_ergani_export_df(classified, self._employees(), 2026)
-        assert result["ΔΙΚ ΗΜΕΡΕΣ"].iloc[0] == 25
+        assert result["ΔΙΚ. ΗΜΕΡΕΣ"].iloc[0] == "025"
 
     def test_entitled_days_empty_for_sick_leave(self):
         classified = pd.DataFrame([{
@@ -354,7 +354,7 @@ class TestBuildErganiExportDf:
             "Έτος Άδειας": pd.NA,
         }])
         result = build_ergani_export_df(classified, self._employees(), 2026)
-        assert result["ΔΙΚ ΗΜΕΡΕΣ"].iloc[0] == ""
+        assert result["ΔΙΚ. ΗΜΕΡΕΣ"].iloc[0] == ""
 
     def test_ergani_leave_type_mapped(self):
         classified = pd.DataFrame([{
@@ -367,4 +367,4 @@ class TestBuildErganiExportDf:
             "Έτος Άδειας": pd.NA,
         }])
         result = build_ergani_export_df(classified, self._employees(), 2026)
-        assert result["ΤΥΠΟΣ ΑΔΕΙΑΣ"].iloc[0] == "Άδεια ασθένειας (ανυπαίτιο κώλυμα παροχής εργασίας)"
+        assert result["ΤΥΠΟΣ"].iloc[0] == "ΑΔΑΙΜ"

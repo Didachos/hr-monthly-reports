@@ -64,6 +64,13 @@ CLASSIFIED_TO_ERGANI_LEAVE_TYPE = {
     "Άνευ αποδοχών άδεια": "Άδεια άνευ αποδοχών",
 }
 
+# Κωδικοί Εργάνη για το Excel export (πρότυπο EXCEL_PROTOTYPE_DAILY_LEAVES)
+CLASSIFIED_TO_ERGANI_CODE = {
+    "Κανονική άδεια": "ΑΔΚΑΝ",
+    "Άδεια ασθενείας": "ΑΔΑΙΜ",
+    "Άνευ αποδοχών άδεια": "ΑΔΑΝ",
+}
+
 
 # =========================
 # HELPERS
@@ -700,23 +707,21 @@ def build_ergani_export_df(
             "ΑΦΜ",
             "ΕΠΩΝΥΜΟ",
             "ΟΝΟΜΑ",
-            "ΗΜΕΡΟΜΗΝΙΑ",
-            "ΤΥΠΟΣ ΑΔΕΙΑΣ",
-            "ΩΡΑ ΑΠΟ",
-            "ΩΡΑ ΕΩΣ",
-            "ΕΤΟΣ",
-            "ΔΙΚ ΗΜΕΡΕΣ",
+            "ΗΜΕΡΑ",
+            "ΤΥΠΟΣ",
+            "ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ",
+            "ΕΤΟΣ ΑΝΑΦΟΡΑΣ",
+            "ΔΙΚ. ΗΜΕΡΕΣ",
         ])
 
     export_df = classified.copy()
 
-    export_df["ΤΥΠΟΣ ΑΔΕΙΑΣ"] = export_df["Τύπος Απουσίας"].map(CLASSIFIED_TO_ERGANI_LEAVE_TYPE)
-    export_df["ΗΜΕΡΟΜΗΝΙΑ"] = pd.to_datetime(export_df["Ημ/νία"]).dt.strftime("%d/%m/%Y")
-    export_df["ΩΡΑ ΑΠΟ"] = ""
-    export_df["ΩΡΑ ΕΩΣ"] = ""
+    export_df["ΤΥΠΟΣ"] = export_df["Τύπος Απουσίας"].map(CLASSIFIED_TO_ERGANI_CODE)
+    export_df["ΗΜΕΡΑ"] = pd.to_datetime(export_df["Ημ/νία"]).dt.normalize()
+    export_df["ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ"] = ""
 
-    export_df["ΕΤΟΣ"] = export_df["Έτος Άδειας"].apply(
-        lambda x: "" if pd.isna(x) else int(x)
+    export_df["ΕΤΟΣ ΑΝΑΦΟΡΑΣ"] = export_df["Έτος Άδειας"].apply(
+        lambda x: "" if pd.isna(x) else str(int(x))
     )
 
     employee_leave_info = employees[
@@ -733,8 +738,8 @@ def build_ergani_export_df(
         how="left"
     )
 
-    export_df["ΔΙΚ ΗΜΕΡΕΣ"] = export_df.apply(
-        lambda row: (v if (v := get_entitled_days(row, year)) is not None else ""),
+    export_df["ΔΙΚ. ΗΜΕΡΕΣ"] = export_df.apply(
+        lambda row: (f"{v:03d}" if (v := get_entitled_days(row, year)) is not None else ""),
         axis=1,
     )
 
@@ -749,16 +754,16 @@ def build_ergani_export_df(
             "ΑΦΜ",
             "ΕΠΩΝΥΜΟ",
             "ΟΝΟΜΑ",
-            "ΗΜΕΡΟΜΗΝΙΑ",
-            "ΤΥΠΟΣ ΑΔΕΙΑΣ",
-            "ΩΡΑ ΑΠΟ",
-            "ΩΡΑ ΕΩΣ",
-            "ΕΤΟΣ",
-            "ΔΙΚ ΗΜΕΡΕΣ",
+            "ΗΜΕΡΑ",
+            "ΤΥΠΟΣ",
+            "ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ",
+            "ΕΤΟΣ ΑΝΑΦΟΡΑΣ",
+            "ΔΙΚ. ΗΜΕΡΕΣ",
         ]
-    ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ", "ΗΜΕΡΟΜΗΝΙΑ"]).reset_index(drop=True)
+    ].sort_values(["ΑΑ Παραρτηματος", "ΑΦΜ", "ΗΜΕΡΑ"]).reset_index(drop=True)
 
-    export_df["ΑΦΜ"] = export_df["ΑΦΜ"].astype(str)
+    # ΑΦΜ: 9 ψηφία με leading zeros
+    export_df["ΑΦΜ"] = export_df["ΑΦΜ"].astype(str).str.zfill(9)
     return export_df
 
 
