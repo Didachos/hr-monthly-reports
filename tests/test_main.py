@@ -367,4 +367,4 @@ class TestBuildErganiExportDf:
             "Έτος Άδειας": pd.NA,
         }])
         result = build_ergani_export_df(classified, self._employees(), 2026)
-        assert result["ΤΥΠΟΣ"].iloc[0] == "ΑΔΑΙΜ"
+        assert result["ΤΥΠΟΣ"].iloc[0] == "ΑΔΑΣ"
