@@ -382,7 +382,7 @@ with tab_run:
                         branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
                         st.download_button(
                             label=f"⬇ Ergani — Παράρτημα {branch_label}",
-                            data=excel_bytes({"Άδειες": branch_out}),
+                            data=excel_bytes({"DAILY": branch_out}),
                             file_name=f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
@@ -405,7 +405,7 @@ with tab_run:
                                 for branch_value, branch_df in ergani_df.groupby("ΑΑ Παραρτηματος", dropna=False):
                                     branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
                                     branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
-                                    od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", excel_bytes({"Άδειες": branch_out}))
+                                    od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", excel_bytes({"DAILY": branch_out}))
                         st.success("✅ Αποθηκεύτηκε στο OneDrive! (output + raw)")
                     except Exception as e:
                         st.warning(f"⚠️ Δεν ήταν δυνατή η αποθήκευση στο OneDrive: {e}")
