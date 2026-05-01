@@ -341,7 +341,7 @@ class TestBuildErganiExportDf:
             "Έτος Άδειας": 2026,
         }])
         result = build_ergani_export_df(classified, self._employees(), 2026)
-        assert result["ΔΙΚ. ΗΜΕΡΕΣ"].iloc[0] == "025"
+        assert result["ΔΙΚ. ΗΜΕΡΕΣ"].iloc[0] == 25
 
     def test_entitled_days_empty_for_sick_leave(self):
         classified = pd.DataFrame([{

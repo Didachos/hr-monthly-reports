@@ -739,7 +739,7 @@ def build_ergani_export_df(
     )
 
     export_df["ΔΙΚ. ΗΜΕΡΕΣ"] = export_df.apply(
-        lambda row: (f"{v:03d}" if (v := get_entitled_days(row, year)) is not None else ""),
+        lambda row: (v if (v := get_entitled_days(row, year)) is not None else ""),
         axis=1,
     )
 
