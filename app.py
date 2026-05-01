@@ -312,7 +312,45 @@ with tab_run:
 
     st.subheader("Αρχεία Εισόδου")
     raw_file = st.file_uploader("Αρχείο παρουσίας (.xlsx)", type=["xlsx"])
-    employees_file = st.file_uploader("employees.xlsx", type=["xlsx"])
+
+    # --- employees.xlsx: αυτόματη φόρτωση από OneDrive (subfolder "config") ---
+    _od_emp_token = st.session_state.get("od_token")
+    _emp_od_bytes = None
+    if _od_emp_token:
+        try:
+            if "employees_od_bytes" not in st.session_state:
+                _emp_files = od.list_files(_od_emp_token, subfolder="config")
+                if any(f["name"] == "employees.xlsx" for f in _emp_files):
+                    st.session_state["employees_od_bytes"] = od.download_file(
+                        _od_emp_token, "employees.xlsx", subfolder="config"
+                    )
+            _emp_od_bytes = st.session_state.get("employees_od_bytes")
+        except Exception:
+            pass
+
+    if _emp_od_bytes:
+        st.success("✅ employees.xlsx φορτώθηκε αυτόματα από OneDrive")
+        _emp_cols = st.columns([3, 1])
+        with _emp_cols[0]:
+            employees_file = st.file_uploader(
+                "Αντικατάσταση employees.xlsx (προαιρετικό)", type=["xlsx"], key="emp_override"
+            )
+        with _emp_cols[1]:
+            st.write("")
+            st.write("")
+            if employees_file and st.button("⬆ Αποθήκευση στο OneDrive", key="emp_save_btn"):
+                od.upload_file(_od_emp_token, "employees.xlsx", employees_file.getvalue(), subfolder="config")
+                st.session_state["employees_od_bytes"] = employees_file.getvalue()
+                st.success("Αποθηκεύτηκε!")
+        _employees_ready = True
+    else:
+        employees_file = st.file_uploader("employees.xlsx", type=["xlsx"])
+        if employees_file and _od_emp_token:
+            if st.button("⬆ Αποθήκευση στο OneDrive", key="emp_save_btn"):
+                od.upload_file(_od_emp_token, "employees.xlsx", employees_file.getvalue(), subfolder="config")
+                st.session_state["employees_od_bytes"] = employees_file.getvalue()
+                st.success("Αποθηκεύτηκε στο OneDrive!")
+        _employees_ready = bool(employees_file)
 
     st.subheader("Ταξινόμηση Απουσιών (προαιρετικό)")
     st.caption("Αν έχεις ήδη συμπληρώσει το classified_absences, ανέβασέ το εδώ για να παραχθεί το πλήρες report.")
@@ -355,13 +393,18 @@ with tab_run:
         except Exception:
             pass
 
-    run = st.button("▶ Εκτέλεση", type="primary", disabled=not (raw_file and employees_file))
+    run = st.button("▶ Εκτέλεση", type="primary", disabled=not (raw_file and _employees_ready))
 
     if run:
         try:
             with st.spinner("Επεξεργασία..."):
                 raw_path = save_upload_to_temp(raw_file)
-                emp_path = save_upload_to_temp(employees_file)
+                # employees: από OneDrive bytes ή από upload
+                _emp_bytes = employees_file.getvalue() if employees_file else _emp_od_bytes
+                _emp_tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                _emp_tmp.write(_emp_bytes)
+                _emp_tmp.close()
+                emp_path = Path(_emp_tmp.name)
 
                 raw_df = load_attendance(raw_path)
                 df = clean_attendance(raw_df)
