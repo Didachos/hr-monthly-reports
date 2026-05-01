@@ -57,26 +57,61 @@ def excel_bytes(sheets: dict) -> bytes:
 
 
 def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
-    """Γράφει το Ergani export με τη στήλη ΗΜΕΡΑ ως καθαρή ημερομηνία (χωρίς ώρα)."""
+    """Γράφει το Ergani export ακριβώς όπως το πρότυπο EXCEL_PROTOTYPE_DAILY_LEAVES."""
+    df = df.copy()
+
+    # ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ: κενό string → None (αληθινό άδειο κελί, dtype='n' όπως πρότυπο)
+    if "ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ" in df.columns:
+        df["ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ"] = df["ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ"].replace("", None)
+
+    # ΕΤΟΣ ΑΝΑΦΟΡΑΣ / ΔΙΚ. ΗΜΕΡΕΣ: χρήση float (όχι Int64) ώστε τα None να γράφονται
+    # ως αληθινά άδεια κελιά (dtype='n'), όχι ως inlineStr
+    for col in ["ΕΤΟΣ ΑΝΑΦΟΡΑΣ", "ΔΙΚ. ΗΜΕΡΕΣ"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")  # NaN = αληθινό κενό
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
         ws = writer.sheets[sheet_name]
         force_text_column(ws, "ΑΦΜ")
-        # Μετά το γράψιμο: αλλαγή τιμής σε date (αφαιρεί ώρα) + format DD/MM/YYYY
+        force_text_column(ws, "ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ")  # fmt='@' όπως πρότυπο
+
+        # Headers ΑΦΜ + ΩΡΑ: fmt='@' και στο header (όπως πρότυπο)
+        for cell in ws[1]:
+            if cell.value in ("ΑΦΜ", "ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ"):
+                cell.number_format = "@"
+
+        # ΗΜΕΡΑ: format mm-dd-yy (ακριβώς όπως πρότυπο)
         for cell in ws[1]:
             if cell.value == "ΗΜΕΡΑ":
                 col_idx = cell.column
                 for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
                     c = row[0]
                     if c.value is not None:
-                        # Timestamp είναι subclass του datetime — .date() αφαιρεί ώρα
-                        try:
-                            c.value = c.value.date()
-                        except AttributeError:
-                            pass
-                        c.number_format = "DD/MM/YYYY"
+                        c.number_format = "mm-dd-yy"
                 break
+
+        # ΕΤΟΣ ΑΝΑΦΟΡΑΣ / ΔΙΚ. ΗΜΕΡΕΣ: float 2025.0 → int 2025 στα κελιά
+        for header_name in ["ΕΤΟΣ ΑΝΑΦΟΡΑΣ", "ΔΙΚ. ΗΜΕΡΕΣ"]:
+            for cell in ws[1]:
+                if cell.value == header_name:
+                    col_idx = cell.column
+                    for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+                        c = row[0]
+                        try:
+                            if c.value is not None:
+                                c.value = int(float(c.value))
+                        except (TypeError, ValueError):
+                            pass
+                    break
+
+        # Καθαρισμός κενών strings → αληθινά άδεια κελιά (dtype='n' όπως πρότυπο)
+        for row in ws.iter_rows(min_row=2):
+            for c in row:
+                if c.value == "":
+                    c.value = None
+
     return buf.getvalue()
 
 
