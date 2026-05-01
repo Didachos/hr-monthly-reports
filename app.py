@@ -57,12 +57,23 @@ def excel_bytes(sheets: dict) -> bytes:
 
 
 def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
-    """Γράφει το Ergani export χωρίς μετατροπή ημερομηνιών σε string.
-    Η στήλη ΗΜΕΡΑ παραμένει datetime ώστε η Εργάνη να την αναγνωρίσει."""
+    """Γράφει το Ergani export με τη στήλη ΗΜΕΡΑ ως καθαρή ημερομηνία (date, όχι datetime)."""
+    df = df.copy()
+    # Μετατροπή ΗΜΕΡΑ σε Python date (όχι datetime) — αφαιρεί το χρόνο εντελώς
+    if "ΗΜΕΡΑ" in df.columns:
+        df["ΗΜΕΡΑ"] = pd.to_datetime(df["ΗΜΕΡΑ"]).dt.date
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
-        force_text_column(writer.sheets[sheet_name], "ΑΦΜ")
+        ws = writer.sheets[sheet_name]
+        force_text_column(ws, "ΑΦΜ")
+        # Εφάρμοσε μορφή ημερομηνίας DD/MM/YYYY στη στήλη ΗΜΕΡΑ
+        for cell in ws[1]:
+            if cell.value == "ΗΜΕΡΑ":
+                col_idx = cell.column
+                for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+                    row[0].number_format = "DD/MM/YYYY"
+                break
     return buf.getvalue()
 
 
