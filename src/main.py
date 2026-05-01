@@ -64,11 +64,11 @@ CLASSIFIED_TO_ERGANI_LEAVE_TYPE = {
     "Άνευ αποδοχών άδεια": "Άδεια άνευ αποδοχών",
 }
 
-# Αντιστοίχιση εσωτερικών τύπων → επίσημα ονόματα Εργάνη (όπως εμφανίζονται στο dropdown)
+# Κωδικοί Εργάνη για το Excel export (από EXCEL_PROTOTYPE_DAILY_LEAVES.xlsx)
 CLASSIFIED_TO_ERGANI_CODE = {
-    "Κανονική άδεια": "Κανονική άδεια",
-    "Άδεια ασθενείας": "Άδεια ασθένειας (ανυπαίτιο κώλυμα παροχής εργασίας)",
-    "Άνευ αποδοχών άδεια": "Άδεια άνευ αποδοχών",
+    "Κανονική άδεια": "ΑΔΚΑΝ",
+    "Άδεια ασθενείας": "ΑΔΑΙΜ",
+    "Άνευ αποδοχών άδεια": "ΑΔΑΝ",
 }
 
 
@@ -721,7 +721,7 @@ def build_ergani_export_df(
     export_df["ΩΡΑ ΑΠΌ - ΩΡΑ ΕΩΣ"] = ""
 
     export_df["ΕΤΟΣ ΑΝΑΦΟΡΑΣ"] = export_df["Έτος Άδειας"].apply(
-        lambda x: "" if pd.isna(x) else str(int(x))
+        lambda x: None if pd.isna(x) else int(x)
     )
 
     employee_leave_info = employees[
