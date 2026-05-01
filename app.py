@@ -56,6 +56,16 @@ def excel_bytes(sheets: dict) -> bytes:
     return buf.getvalue()
 
 
+def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
+    """Γράφει το Ergani export χωρίς μετατροπή ημερομηνιών σε string.
+    Η στήλη ΗΜΕΡΑ παραμένει datetime ώστε η Εργάνη να την αναγνωρίσει."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        force_text_column(writer.sheets[sheet_name], "ΑΦΜ")
+    return buf.getvalue()
+
+
 def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for _, r in leaves.iterrows():
@@ -382,7 +392,7 @@ with tab_run:
                         branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
                         st.download_button(
                             label=f"⬇ Ergani — Παράρτημα {branch_label}",
-                            data=excel_bytes({"DAILY": branch_out}),
+                            data=ergani_excel_bytes(branch_out),
                             file_name=f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
@@ -405,7 +415,7 @@ with tab_run:
                                 for branch_value, branch_df in ergani_df.groupby("ΑΑ Παραρτηματος", dropna=False):
                                     branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
                                     branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
-                                    od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", excel_bytes({"DAILY": branch_out}))
+                                    od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", ergani_excel_bytes(branch_out))
                         st.success("✅ Αποθηκεύτηκε στο OneDrive! (output + raw)")
                     except Exception as e:
                         st.warning(f"⚠️ Δεν ήταν δυνατή η αποθήκευση στο OneDrive: {e}")
