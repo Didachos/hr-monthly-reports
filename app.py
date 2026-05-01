@@ -63,15 +63,19 @@ def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
         ws = writer.sheets[sheet_name]
         force_text_column(ws, "ΑΦΜ")
-        # Μετά το γράψιμο: αντικατάσταση datetime με date απευθείας στα κελιά openpyxl
+        # Μετά το γράψιμο: αλλαγή τιμής σε date (αφαιρεί ώρα) + format DD/MM/YYYY
         for cell in ws[1]:
             if cell.value == "ΗΜΕΡΑ":
                 col_idx = cell.column
                 for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
                     c = row[0]
-                    if isinstance(c.value, datetime.datetime):
-                        c.value = c.value.date()
-                    c.number_format = "DD/MM/YYYY"
+                    if c.value is not None:
+                        # Timestamp είναι subclass του datetime — .date() αφαιρεί ώρα
+                        try:
+                            c.value = c.value.date()
+                        except AttributeError:
+                            pass
+                        c.number_format = "DD/MM/YYYY"
                 break
     return buf.getvalue()
 
