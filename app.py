@@ -584,6 +584,22 @@ with tab_history:
                                 st.success(f"✅ {f.name}")
                             except Exception as e:
                                 st.error(f"❌ {f.name}: {e}")
+
+            st.caption("Classified absences — ονόμασε τα αρχεία ως `classified_absences_YYYY_MM.xlsx`")
+            cls_files_to_upload = st.file_uploader(
+                "Classified absences πολλών μηνών (.xlsx)",
+                type=["xlsx"],
+                accept_multiple_files=True,
+                key="manual_upload_cls",
+            )
+            if cls_files_to_upload and st.button("⬆ Ανέβασμα classified"):
+                with st.spinner("Ανέβασμα..."):
+                    for f in cls_files_to_upload:
+                        try:
+                            od.upload_file(od_token, f.name, f.getvalue(), subfolder="output")
+                            st.success(f"✅ {f.name}")
+                        except Exception as e:
+                            st.error(f"❌ {f.name}: {e}")
         st.divider()
 
     # --- employees.xlsx από config ---
