@@ -426,7 +426,26 @@ with tab_run:
                 else:
                     classified = pd.DataFrame()
 
-                leaves = build_leave_summary(classified, employees, year, month)
+                # ── Year-to-date classified: συνδυάζει ΟΛΟΥΣ τους μήνες του έτους ──
+                # Χρησιμοποιείται μόνο για το leave_summary ώστε τα υπόλοιπα να είναι σωστά
+                classified_ytd = classified.copy()
+                _od_ytd = st.session_state.get("od_token")
+                if _od_ytd and month > 1:
+                    try:
+                        _all_od = od.list_files(_od_ytd, subfolder="output")
+                        for _m in range(1, month):
+                            _prev_name = f"classified_absences_{year}_{_m:02d}.xlsx"
+                            if any(f["name"] == _prev_name for f in _all_od):
+                                _pb = od.download_file(_od_ytd, _prev_name, subfolder="output")
+                                _pt = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                                _pt.write(_pb); _pt.close()
+                                _prev_cls = load_classified_absences(Path(_pt.name))
+                                if not _prev_cls.empty:
+                                    classified_ytd = pd.concat([_prev_cls, classified_ytd], ignore_index=True)
+                    except Exception:
+                        pass  # fallback: μόνο ο τρέχων μήνας
+
+                leaves = build_leave_summary(classified_ytd, employees, year, month)
                 validation = build_validation_report(raw_df, df, employees, absences, classified, year, month)
                 alerts = build_alerts_report(employees, absences, classified, workdays, overtime_s, leaves, year)
                 ergani_df = build_ergani_export_df(classified, employees, year)
@@ -502,6 +521,10 @@ with tab_run:
                         with st.spinner("Αποθήκευση στο OneDrive..."):
                             # Αποθήκευση raw attendance στο OneDrive (subfolder: raw)
                             od.upload_file(od_token, f"raw_attendance_{year}_{month:02d}.xlsx", raw_file.getvalue(), subfolder="raw")
+                            # Αποθήκευση classified (ώστε μελλοντικά μήνες να έχουν YTD δεδομένα)
+                            _cls_save_bytes = classified_file.getvalue() if classified_file else classified_bytes
+                            if _cls_save_bytes:
+                                od.upload_file(od_token, f"classified_absences_{year}_{month:02d}.xlsx", _cls_save_bytes, subfolder="output")
                             # Αποθήκευση monthly report
                             od.upload_file(od_token, f"monthly_report_{year}_{month:02d}.xlsx", report_bytes)
                             if not ergani_df.empty:
