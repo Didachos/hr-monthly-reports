@@ -669,6 +669,34 @@ with tab_history:
                                     )
                                 except Exception as e:
                                     st.warning(f"Δεν ήταν δυνατή η λήψη του {f['name']}: {e}")
+
+                        # Ανέβασμα classified για αυτόν τον μήνα (για YTD υπολογισμό)
+                        try:
+                            _py, _pm = int(y), int(m)
+                            _cls_name = f"classified_absences_{_py}_{_pm:02d}.xlsx"
+                            _cls_exists = any(f["name"] == _cls_name for f in files)
+                            st.caption("📋 Classified Absences")
+                            if _cls_exists:
+                                _cls_content = od.download_file(od_token, _cls_name, subfolder="output")
+                                st.download_button(
+                                    label=f"⬇ {_cls_name}",
+                                    data=_cls_content,
+                                    file_name=_cls_name,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"od_cls_{_cls_name}",
+                                )
+                            _cls_upload = st.file_uploader(
+                                f"{'Αντικατάσταση' if _cls_exists else '⬆ Ανέβασε'} {_cls_name}",
+                                type=["xlsx"],
+                                key=f"hist_cls_{period}",
+                            )
+                            if _cls_upload:
+                                if st.button("💾 Αποθήκευση στο OneDrive", key=f"hist_cls_save_{period}"):
+                                    od.upload_file(od_token, _cls_name, _cls_upload.getvalue(), subfolder="output")
+                                    st.success(f"✅ {_cls_name} αποθηκεύτηκε!")
+                                    st.rerun()
+                        except Exception:
+                            pass
         except Exception as e:
             st.error(f"Σφάλμα φόρτωσης από OneDrive: {e}")
     else:
