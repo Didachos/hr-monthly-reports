@@ -104,12 +104,22 @@ ERGANI_CODE_TO_DESCRIPTION = {
     "ΩΑΑΛ":   "Άδεια Άλλη (ΩΡΕΣ)",
 }
 
-# Κωδικοί για τους τύπους που χρησιμοποιούμε εσωτερικά
+# Κωδικοί — παλιά εσωτερικά ονόματα + όλες οι Εργάνης περιγραφές → code
 CLASSIFIED_TO_ERGANI_CODE = {
-    "Κανονική άδεια":      "ΑΔΚΑΝ",  # Κανονική άδεια
-    "Άδεια ασθενείας":     "ΑΔΑΣ",   # Άδεια ασθένειας (ανυπαίτιο κώλυμα)
-    "Άνευ αποδοχών άδεια": "ΑΔΑΑ",   # Άδεια άνευ αποδοχών
+    # Backward compat (παλιά εσωτερικά ονόματα)
+    "Κανονική άδεια":      "ΑΔΚΑΝ",
+    "Άδεια ασθενείας":     "ΑΔΑΣ",
+    "Άνευ αποδοχών άδεια": "ΑΔΑΑ",
+    # Όλες οι επίσημες περιγραφές Εργάνης → code
+    **{desc: code for code, desc in ERGANI_CODE_TO_DESCRIPTION.items()},
 }
+
+# Επέκταση VALID_ABSENCE_TYPES ώστε να περιλαμβάνει όλες τις Εργάνης περιγραφές
+VALID_ABSENCE_TYPES = VALID_ABSENCE_TYPES | set(ERGANI_CODE_TO_DESCRIPTION.values())
+
+# Σύνολα για leave_summary (παλιά + νέα ονόματα)
+_SICK_LEAVE_TYPES = {"Άδεια ασθενείας", ERGANI_CODE_TO_DESCRIPTION["ΑΔΑΣ"]}
+_UNPAID_LEAVE_TYPES = {"Άνευ αποδοχών άδεια", ERGANI_CODE_TO_DESCRIPTION["ΑΔΑΑ"]}
 
 
 # =========================
@@ -508,6 +518,97 @@ def find_absences(
     return result
 
 
+def build_classified_template_excel_bytes(absences: pd.DataFrame) -> bytes:
+    """
+    Δημιουργεί Excel με 2 φύλλα:
+      Φύλλο 1 «Absences»  : template με dropdown για Τύπος Απουσίας
+      Φύλλο 2 «Κωδικοί»   : πίνακας κωδικών Εργάνης (Κωδικός | Περιγραφή)
+    """
+    import io
+    from openpyxl import Workbook
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+
+    # ── Φύλλο 2: Κωδικοί Εργάνης ──────────────────────────────────────
+    ws_codes = wb.active
+    ws_codes.title = "Κωδικοί"
+
+    header_fill = PatternFill("solid", fgColor="2F5496")
+    header_font = Font(bold=True, color="FFFFFF")
+
+    ws_codes["A1"] = "Κωδικός"
+    ws_codes["B1"] = "Περιγραφή"
+    for cell in [ws_codes["A1"], ws_codes["B1"]]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for i, (code, desc) in enumerate(ERGANI_CODE_TO_DESCRIPTION.items(), start=2):
+        ws_codes.cell(i, 1, code)
+        ws_codes.cell(i, 2, desc)
+
+    ws_codes.column_dimensions["A"].width = 12
+    ws_codes.column_dimensions["B"].width = 65
+    n_codes = len(ERGANI_CODE_TO_DESCRIPTION)
+
+    # ── Φύλλο 1: Absences ──────────────────────────────────────────────
+    ws = wb.create_sheet("Absences", 0)
+
+    template = absences[
+        ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
+    ].copy()
+    template["Τύπος Απουσίας"] = ""
+    template["Έτος Άδειας"] = ""
+    template["ΑΦΜ"] = template["ΑΦΜ"].astype(str)
+
+    cols = list(template.columns)
+    # Header
+    for c_idx, col in enumerate(cols, 1):
+        cell = ws.cell(1, c_idx, col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    # Δεδομένα
+    for r_idx, row in enumerate(template.itertuples(index=False), 2):
+        for c_idx, val in enumerate(row, 1):
+            ws.cell(r_idx, c_idx, val)
+
+    # Βρες τη στήλη «Τύπος Απουσίας»
+    type_col_idx = cols.index("Τύπος Απουσίας") + 1  # 1-based
+    from openpyxl.utils import get_column_letter
+    type_col_letter = get_column_letter(type_col_idx)
+
+    # Dropdown που παραπέμπει στο Φύλλο 2 (αποφεύγει το 255-char limit)
+    n_rows = max(len(template) + 10, 100)  # λίγο extra χώρος
+    dv = DataValidation(
+        type="list",
+        formula1=f"'Κωδικοί'!$B$2:$B${n_codes + 1}",
+        allow_blank=True,
+        showDropDown=False,
+    )
+    dv.error = "Επέλεξε τύπο από τη λίστα"
+    dv.errorTitle = "Μη έγκυρος τύπος"
+    dv.prompt = "Επέλεξε τύπο άδειας"
+    dv.promptTitle = "Τύπος Απουσίας"
+    ws.add_data_validation(dv)
+    dv.sqref = f"{type_col_letter}2:{type_col_letter}{n_rows}"
+
+    # Πλάτη στηλών
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions[type_col_letter].width = 52
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def build_classified_absence_template(absences: pd.DataFrame) -> pd.DataFrame:
     template = absences[
         ["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία"]
@@ -668,11 +769,11 @@ def build_leave_summary(
     ].groupby("ΑΦΜ").size()
 
     sick = classified[
-        classified["Τύπος Απουσίας"] == "Άδεια ασθενείας"
+        classified["Τύπος Απουσίας"].isin(_SICK_LEAVE_TYPES)
     ].groupby("ΑΦΜ").size()
 
     unpaid = classified[
-        classified["Τύπος Απουσίας"] == "Άνευ αποδοχών άδεια"
+        classified["Τύπος Απουσίας"].isin(_UNPAID_LEAVE_TYPES)
     ].groupby("ΑΦΜ").size()
 
     result["Κανονική Άδεια από Προηγούμενο Έτος"] = result["ΑΦΜ"].map(annual_prev).fillna(0).astype(int)

@@ -14,6 +14,7 @@ import onedrive as od
 from main import (
     build_alerts_report,
     build_classified_absence_template,
+    build_classified_template_excel_bytes,
     build_ergani_export_df,
     build_leave_summary,
     build_validation_report,
@@ -452,7 +453,7 @@ with tab_run:
 
             if not classified_file and not classified_bytes:
                 template = build_classified_absence_template(absences)
-                template_bytes = excel_bytes({"Sheet1": template})
+                template_bytes = build_classified_template_excel_bytes(absences)
                 st.info("Κατέβασε το template, συμπλήρωσε τις στήλες 'Τύπος Απουσίας' και 'Έτος Άδειας', και ανέβασέ το ξανά.")
                 st.download_button(
                     label="⬇ Κατέβασε classified_absences template",
