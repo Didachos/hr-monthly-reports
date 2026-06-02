@@ -761,15 +761,56 @@ with tab_history:
 with tab_balances:
     st.subheader("Υπόλοιπα Κανονικής Άδειας")
 
-    # Από την τελευταία εκτέλεση (session) ή από το τελευταίο αποθηκευμένο report
     leaves_df = st.session_state.get("leaves")
-    leaves_month = st.session_state.get("leaves_month", 12)
-    leaves_year = st.session_state.get("leaves_year", "")
+    leaves_month = st.session_state.get("leaves_month", _today.month)
+    leaves_year = st.session_state.get("leaves_year", _today.year)
+
+    od_token = st.session_state.get("od_token")
+
+    # Αυτόματος υπολογισμός YTD από OneDrive: φορτώνει employees + όλα τα classified του έτους
+    if od_token:
+        try:
+            _bal_files = od.list_files(od_token, subfolder="output")
+            _bal_emp_bytes = st.session_state.get("employees_od_bytes")
+            if _bal_emp_bytes is None:
+                try:
+                    _cfg = od.list_files(od_token, subfolder="config")
+                    if any(f["name"] == "employees.xlsx" for f in _cfg):
+                        _bal_emp_bytes = od.download_file(od_token, "employees.xlsx", subfolder="config")
+                except Exception:
+                    pass
+
+            if _bal_emp_bytes:
+                _bal_year = int(leaves_year) if leaves_year else _today.year
+                # Φόρτωσε όλα τα classified για το τρέχον έτος
+                _bal_classified_list = []
+                _bal_last_month = 0
+                for _bm in range(1, 13):
+                    _bcls = f"classified_absences_{_bal_year}_{_bm:02d}.xlsx"
+                    if any(f["name"] == _bcls for f in _bal_files):
+                        _bb = od.download_file(od_token, _bcls, subfolder="output")
+                        _bt = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                        _bt.write(_bb); _bt.close()
+                        _bc = load_classified_absences(Path(_bt.name))
+                        if not _bc.empty:
+                            _bal_classified_list.append(_bc)
+                            _bal_last_month = _bm
+
+                if _bal_classified_list:
+                    _bal_emp_tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                    _bal_emp_tmp.write(_bal_emp_bytes); _bal_emp_tmp.close()
+                    _bal_employees = load_employees(Path(_bal_emp_tmp.name))
+                    _bal_classified_all = pd.concat(_bal_classified_list, ignore_index=True)
+                    leaves_df = build_leave_summary(_bal_classified_all, _bal_employees, _bal_year, _bal_last_month)
+                    leaves_month = _bal_last_month
+                    leaves_year = _bal_year
+                    st.caption(f"📂 YTD από OneDrive — {_bal_last_month} μήνες δεδομένων ({_bal_year})")
+        except Exception:
+            pass
 
     if leaves_df is None:
-        od_token = st.session_state.get("od_token")
+        # Fallback: τελευταίο monthly report (τοπικά ή OneDrive)
         if od_token:
-            # Φόρτωσε το πιο πρόσφατο monthly report από OneDrive
             try:
                 files = od.list_files(od_token, subfolder="output")
                 report_files = sorted(
@@ -783,24 +824,21 @@ with tab_balances:
                     parts = latest_name.replace(".xlsx", "").split("_")
                     leaves_month = int(parts[-1])
                     leaves_year = int(parts[-2])
-                    st.caption(f"📂 Από OneDrive: {latest_name}")
+                    st.caption(f"📂 Από OneDrive: {latest_name} (δεν βρέθηκαν classified αρχεία)")
             except Exception:
                 pass
 
-    if leaves_df is None:
-        # Fallback: τοπικά αρχεία
-        if OUTPUT_DIR.exists():
-            reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
-            if reports:
-                latest = reports[0]
-                try:
-                    leaves_df = pd.read_excel(latest, sheet_name="Άδειες")
-                    parts = latest.stem.split("_")
-                    leaves_month = int(parts[-1])
-                    leaves_year = int(parts[-2])
-                    st.caption(f"Από: {latest.name}")
-                except Exception:
-                    pass
+    if leaves_df is None and OUTPUT_DIR.exists():
+        reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
+        if reports:
+            try:
+                leaves_df = pd.read_excel(reports[0], sheet_name="Άδειες")
+                parts = reports[0].stem.split("_")
+                leaves_month = int(parts[-1])
+                leaves_year = int(parts[-2])
+                st.caption(f"Από: {reports[0].name}")
+            except Exception:
+                pass
 
     if leaves_df is None:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
