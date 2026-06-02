@@ -117,6 +117,16 @@ CLASSIFIED_TO_ERGANI_CODE = {
 # Επέκταση VALID_ABSENCE_TYPES ώστε να περιλαμβάνει όλες τις Εργάνης περιγραφές
 VALID_ABSENCE_TYPES = VALID_ABSENCE_TYPES | set(ERGANI_CODE_TO_DESCRIPTION.values())
 
+# Επέκταση CLASSIFIED_TO_ERGANI_LEAVE_TYPE: όλες οι Εργάνης περιγραφές → identity mapping
+# (ο χρήστης επιλέγει απευθείας Εργάνης περιγραφή από το dropdown)
+CLASSIFIED_TO_ERGANI_LEAVE_TYPE = {
+    **CLASSIFIED_TO_ERGANI_LEAVE_TYPE,
+    **{desc: desc for desc in ERGANI_CODE_TO_DESCRIPTION.values()},
+}
+
+# Ενημέρωση ERGANI_LEAVE_TYPES ώστε να ταιριάζει ακριβώς με ERGANI_CODE_TO_DESCRIPTION
+ERGANI_LEAVE_TYPES = set(ERGANI_CODE_TO_DESCRIPTION.values())
+
 # Σύνολα για leave_summary (παλιά + νέα ονόματα)
 _SICK_LEAVE_TYPES = {"Άδεια ασθενείας", ERGANI_CODE_TO_DESCRIPTION["ΑΔΑΣ"]}
 _UNPAID_LEAVE_TYPES = {"Άνευ αποδοχών άδεια", ERGANI_CODE_TO_DESCRIPTION["ΑΔΑΑ"]}
