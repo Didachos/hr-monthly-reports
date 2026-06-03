@@ -767,10 +767,29 @@ with tab_balances:
 
     od_token = st.session_state.get("od_token")
 
-    # Αυτόματος υπολογισμός YTD από OneDrive: φορτώνει employees + όλα τα classified του έτους
-    if od_token:
+    # Αυτόματος υπολογισμός YTD από OneDrive
+    if od_token and leaves_df is None:
         try:
             _bal_files = od.list_files(od_token, subfolder="output")
+            _bal_year = _today.year
+
+            # Βρες τον τελευταίο μήνα classified και το τελευταίο monthly report
+            _bal_last_cls_month = max(
+                (int(f["name"].replace(".xlsx","").split("_")[-1])
+                 for f in _bal_files
+                 if f["name"].startswith(f"classified_absences_{_bal_year}_")),
+                default=0
+            )
+            _bal_report_files = sorted(
+                [f["name"] for f in _bal_files
+                 if f["name"].startswith(f"monthly_report_{_bal_year}_") and f["name"].endswith(".xlsx")],
+                reverse=True,
+            )
+            _bal_last_report_month = (
+                int(_bal_report_files[0].replace(".xlsx","").split("_")[-1])
+                if _bal_report_files else 0
+            )
+
             _bal_emp_bytes = st.session_state.get("employees_od_bytes")
             if _bal_emp_bytes is None:
                 try:
@@ -780,51 +799,55 @@ with tab_balances:
                 except Exception:
                     pass
 
-            if _bal_emp_bytes:
-                _bal_year = int(leaves_year) if leaves_year else _today.year
-                # Φόρτωσε όλα τα classified για το τρέχον έτος
-                _bal_classified_list = []
-                _bal_last_month = 0
-                for _bm in range(1, 13):
-                    _bcls = f"classified_absences_{_bal_year}_{_bm:02d}.xlsx"
-                    if any(f["name"] == _bcls for f in _bal_files):
-                        _bb = od.download_file(od_token, _bcls, subfolder="output")
-                        _bt = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-                        _bt.write(_bb); _bt.close()
-                        _bc = load_classified_absences(Path(_bt.name))
-                        if not _bc.empty:
-                            _bal_classified_list.append(_bc)
-                            _bal_last_month = _bm
+            if _bal_emp_bytes and (_bal_last_cls_month > 0 or _bal_last_report_month > 0):
+                _bal_emp_tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                _bal_emp_tmp.write(_bal_emp_bytes); _bal_emp_tmp.close()
+                _bal_employees = load_employees(Path(_bal_emp_tmp.name))
 
-                if _bal_classified_list:
-                    _bal_emp_tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-                    _bal_emp_tmp.write(_bal_emp_bytes); _bal_emp_tmp.close()
-                    _bal_employees = load_employees(Path(_bal_emp_tmp.name))
-                    _bal_classified_all = pd.concat(_bal_classified_list, ignore_index=True)
-                    leaves_df = build_leave_summary(_bal_classified_all, _bal_employees, _bal_year, _bal_last_month)
-                    leaves_month = _bal_last_month
+                if _bal_last_cls_month >= _bal_last_report_month:
+                    # Classified καλύπτουν τον πιο πρόσφατο μήνα → YTD από classified
+                    _bal_classified_list = []
+                    for _bm in range(1, _bal_last_cls_month + 1):
+                        _bcls = f"classified_absences_{_bal_year}_{_bm:02d}.xlsx"
+                        if any(f["name"] == _bcls for f in _bal_files):
+                            _bb = od.download_file(od_token, _bcls, subfolder="output")
+                            _bt = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                            _bt.write(_bb); _bt.close()
+                            _bc = load_classified_absences(Path(_bt.name))
+                            if not _bc.empty:
+                                _bal_classified_list.append(_bc)
+                    if _bal_classified_list:
+                        _bal_classified_all = pd.concat(_bal_classified_list, ignore_index=True)
+                        leaves_df = build_leave_summary(_bal_classified_all, _bal_employees, _bal_year, _bal_last_cls_month)
+                        leaves_month = _bal_last_cls_month
+                        leaves_year = _bal_year
+                        _missing = [m for m in range(1, _bal_last_cls_month + 1)
+                                    if not any(f["name"] == f"classified_absences_{_bal_year}_{m:02d}.xlsx" for f in _bal_files)]
+                        _note = f"📂 YTD classified — {_bal_last_cls_month} μήνες ({_bal_year})"
+                        if _missing:
+                            _note += f" ⚠️ Λείπουν: {', '.join(MONTHS[m] for m in _missing)}"
+                        st.caption(_note)
+                else:
+                    # Monthly report είναι νεότερο → χρησιμοποίησε το ως πιο πλήρες snapshot
+                    _content = od.download_file(od_token, _bal_report_files[0], subfolder="output")
+                    leaves_df = pd.read_excel(io.BytesIO(_content), sheet_name="Άδειες")
+                    leaves_month = _bal_last_report_month
                     leaves_year = _bal_year
-                    st.caption(f"📂 YTD από OneDrive — {_bal_last_month} μήνες δεδομένων ({_bal_year})")
+                    _cls_note = f"μέχρι {MONTHS[_bal_last_cls_month]}" if _bal_last_cls_month else "κανένα"
+                    st.caption(f"📂 Monthly report {MONTHS[_bal_last_report_month]} {_bal_year} "
+                               f"(classified: {_cls_note})")
         except Exception:
             pass
 
-    if leaves_df is None:
-        # Fallback: τελευταίο monthly report (τοπικά ή OneDrive)
-        if od_token:
+    if leaves_df is None and not od_token and OUTPUT_DIR.exists():
+        reports = sorted(OUTPUT_DIR.glob("monthly_report_*.xlsx"), reverse=True)
+        if reports:
             try:
-                files = od.list_files(od_token, subfolder="output")
-                report_files = sorted(
-                    [f["name"] for f in files if f["name"].startswith("monthly_report_") and f["name"].endswith(".xlsx")],
-                    reverse=True,
-                )
-                if report_files:
-                    latest_name = report_files[0]
-                    content = od.download_file(od_token, latest_name, subfolder="output")
-                    leaves_df = pd.read_excel(io.BytesIO(content), sheet_name="Άδειες")
-                    parts = latest_name.replace(".xlsx", "").split("_")
-                    leaves_month = int(parts[-1])
-                    leaves_year = int(parts[-2])
-                    st.caption(f"📂 Από OneDrive: {latest_name} (δεν βρέθηκαν classified αρχεία)")
+                leaves_df = pd.read_excel(reports[0], sheet_name="Άδειες")
+                parts = reports[0].stem.split("_")
+                leaves_month = int(parts[-1])
+                leaves_year = int(parts[-2])
+                st.caption(f"Από: {reports[0].name}")
             except Exception:
                 pass
 
