@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import onedrive as od
 from main import (
+    ERGANI_CODE_TO_DESCRIPTION,
     build_alerts_report,
     build_classified_absence_template,
     build_classified_template_excel_bytes,
@@ -55,6 +56,53 @@ def excel_bytes(sheets: dict) -> bytes:
             format_dates_for_excel(df).to_excel(writer, sheet_name=sheet_name, index=False)
             force_text_column(writer.sheets[sheet_name], "ΑΦΜ")
     return buf.getvalue()
+
+
+def reconstruct_classified_from_ergani(
+    ergani_files: list[tuple[int, bytes]]
+) -> pd.DataFrame:
+    """
+    Ανακατασκευάζει classified DataFrame από Ergani export αρχεία.
+
+    ergani_files: list of (branch_aa, excel_bytes)
+        Το branch_aa είναι ο αριθμός παραρτήματος (ΑΑ Παραρτηματος),
+        εξαγόμενος από το όνομα αρχείου ergani_export_parartima_{aa}_{year}_{month}.xlsx
+    """
+    _CODE_TO_DESC = ERGANI_CODE_TO_DESCRIPTION
+
+    frames = []
+    for aa, raw_bytes in ergani_files:
+        try:
+            xf = pd.read_excel(io.BytesIO(raw_bytes), dtype={"ΑΦΜ": str})
+            xf.columns = [str(c).strip() for c in xf.columns]
+
+            if "ΤΥΠΟΣ" not in xf.columns or "ΗΜΕΡΑ" not in xf.columns:
+                continue
+
+            xf["Τύπος Απουσίας"] = xf["ΤΥΠΟΣ"].map(_CODE_TO_DESC)
+            xf["Ημ/νία"] = pd.to_datetime(xf["ΗΜΕΡΑ"], errors="coerce").dt.normalize()
+            xf["Έτος Άδειας"] = pd.to_numeric(xf.get("ΕΤΟΣ ΑΝΑΦΟΡΑΣ"), errors="coerce")
+            xf["ΑΑ Παραρτηματος"] = aa
+            xf["ΑΦΜ"] = xf["ΑΦΜ"].astype(str).str.strip()
+            xf["Επώνυμο"] = xf.get("ΕΠΩΝΥΜΟ", "").astype(str).str.strip()
+            xf["Όνομα"] = xf.get("ΟΝΟΜΑ", "").astype(str).str.strip()
+
+            # Για μη-κανονική άδεια, Έτος Άδειας = NaN
+            xf.loc[xf["Τύπος Απουσίας"] != "Κανονική άδεια", "Έτος Άδειας"] = pd.NA
+
+            cls = xf[["ΑΑ Παραρτηματος", "ΑΦΜ", "Επώνυμο", "Όνομα", "Ημ/νία",
+                       "Τύπος Απουσίας", "Έτος Άδειας"]].copy()
+            cls = cls.dropna(subset=["ΑΦΜ", "Ημ/νία", "Τύπος Απουσίας"])
+            frames.append(cls)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+
+    result = pd.concat(frames, ignore_index=True).drop_duplicates().reset_index(drop=True)
+    result["ΑΦΜ"] = result["ΑΦΜ"].astype(str)
+    return result
 
 
 def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
@@ -606,15 +654,16 @@ with tab_history:
     if od_token:
         with st.expander("🔄 Αναδημιουργία Αναφορών (YTD fix)"):
             st.caption(
-                "Βρίσκει μήνες που έχουν **raw + classified** στο OneDrive και "
-                "αναδημιουργεί το monthly report με σωστό YTD υπόλοιπο αδειών."
+                "Βρίσκει μήνες που έχουν **raw** στο OneDrive και αναδημιουργεί το monthly report "
+                "με σωστό YTD υπόλοιπο αδειών. Αν δεν υπάρχει classified, το ανακατασκευάζει "
+                "αυτόματα από τα Ergani export αρχεία."
             )
             try:
+                import re as _re
                 _regen_raw_files = od.list_files(od_token, subfolder="raw")
                 _regen_out_files = od.list_files(od_token, subfolder="output")
 
                 # Βρες μήνες που έχουν raw_attendance_{year}_{MM}.xlsx στο "raw"
-                import re as _re
                 _regen_months = []
                 for _rf in _regen_raw_files:
                     _m = _re.match(r"raw_attendance_(\d{4})_(\d{2})\.xlsx", _rf["name"])
@@ -622,27 +671,42 @@ with tab_history:
                         _ry, _rm = int(_m.group(1)), int(_m.group(2))
                         _cls_name = f"classified_absences_{_ry}_{_rm:02d}.xlsx"
                         _has_cls = any(f["name"] == _cls_name for f in _regen_out_files)
-                        _regen_months.append((_ry, _rm, _has_cls))
+                        # Έλεγχος αν υπάρχουν Ergani exports για αυτόν τον μήνα
+                        _ergani_pat = _re.compile(
+                            rf"ergani_export_parartima_(\d+)_{_ry}_{_rm:02d}\.xlsx"
+                        )
+                        _ergani_matches = [
+                            (int(_ergani_pat.match(f["name"]).group(1)), f["name"])
+                            for f in _regen_out_files
+                            if _ergani_pat.match(f["name"])
+                        ]
+                        _regen_months.append((_ry, _rm, _has_cls, _ergani_matches))
 
                 _regen_months.sort()
 
                 if not _regen_months:
                     st.info("Δεν βρέθηκαν raw αρχεία στο OneDrive (subfolder: raw).")
                 else:
-                    _ready = [(_y, _m) for _y, _m, _ok in _regen_months if _ok]
-                    _missing_cls = [(_y, _m) for _y, _m, _ok in _regen_months if not _ok]
+                    # Κατάσταση κάθε μήνα
+                    _ready = []
+                    _no_source = []
+                    for _ry, _rm, _has_cls, _ergani_m in _regen_months:
+                        if _has_cls or _ergani_m:
+                            _ready.append((_ry, _rm, _has_cls, _ergani_m))
+                        else:
+                            _no_source.append((_ry, _rm))
 
-                    if _missing_cls:
+                    if _no_source:
                         st.warning(
-                            "Οι παρακάτω μήνες έχουν raw αλλά **όχι classified** — δεν μπορούν να αναδημιουργηθούν: "
-                            + ", ".join(f"{MONTHS[_m]} {_y}" for _y, _m in _missing_cls)
+                            "Οι παρακάτω μήνες δεν έχουν **ούτε classified ούτε Ergani exports** — "
+                            "ανέβασε τα classified χειροκίνητα: "
+                            + ", ".join(f"{MONTHS[_m]} {_y}" for _y, _m in _no_source)
                         )
 
                     if _ready:
-                        st.write(
-                            "**Έτοιμοι για αναδημιουργία:** "
-                            + ", ".join(f"{MONTHS[_m]} {_y}" for _y, _m in _ready)
-                        )
+                        for _ry, _rm, _has_cls, _ergani_m in _ready:
+                            _src = "classified" if _has_cls else f"Ergani ({len(_ergani_m)} παρ.)"
+                            st.write(f"✅ **{MONTHS[_rm]} {_ry}** — πηγή: {_src}")
 
                         if st.button("🔄 Αναδημιουργία Όλων", type="primary"):
                             try:
@@ -652,20 +716,38 @@ with tab_history:
                                 _regen_emp_tmp.write(_regen_emp_bytes); _regen_emp_tmp.close()
                                 _regen_employees = load_employees(Path(_regen_emp_tmp.name))
 
-                                # Φόρτωση ΟΛΩΝ των classified για YTD (μία φορά)
+                                # Φόρτωση / ανακατασκευή ΟΛΩΝ των classified για YTD (μία φορά)
                                 _regen_all_cls = {}
-                                for _cy, _cm, _cok in _regen_months:
+                                for _cy, _cm, _cok, _cerg in _regen_months:
+                                    if not (_cok or _cerg):
+                                        continue
                                     if _cok:
                                         _cn = f"classified_absences_{_cy}_{_cm:02d}.xlsx"
                                         _cb = od.download_file(od_token, _cn, subfolder="output")
                                         _ct = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
                                         _ct.write(_cb); _ct.close()
                                         _regen_all_cls[(_cy, _cm)] = load_classified_absences(Path(_ct.name))
+                                    else:
+                                        # Ανακατασκευή από Ergani exports
+                                        _erg_pairs = []
+                                        for _aa, _ename in _cerg:
+                                            _eb = od.download_file(od_token, _ename, subfolder="output")
+                                            _erg_pairs.append((_aa, _eb))
+                                        _reconstructed = reconstruct_classified_from_ergani(_erg_pairs)
+                                        if not _reconstructed.empty:
+                                            # Αποθήκευση στο OneDrive για μελλοντική χρήση
+                                            _rcls_name = f"classified_absences_{_cy}_{_cm:02d}.xlsx"
+                                            _rcls_buf = io.BytesIO()
+                                            with pd.ExcelWriter(_rcls_buf, engine="openpyxl") as _rw:
+                                                format_dates_for_excel(_reconstructed).to_excel(_rw, index=False)
+                                                force_text_column(_rw.sheets["Sheet1"], "ΑΦΜ")
+                                            od.upload_file(od_token, _rcls_name, _rcls_buf.getvalue(), subfolder="output")
+                                            _regen_all_cls[(_cy, _cm)] = _reconstructed
 
                                 _regen_progress = st.progress(0)
                                 _regen_status = st.empty()
 
-                                for _idx, (_ry, _rm) in enumerate(_ready):
+                                for _idx, (_ry, _rm, _rhas_cls, _rergani) in enumerate(_ready):
                                     _regen_status.info(f"Επεξεργασία {MONTHS[_rm]} {_ry}...")
 
                                     # Raw
