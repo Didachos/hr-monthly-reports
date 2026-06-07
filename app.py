@@ -602,6 +602,119 @@ with tab_history:
                             st.error(f"❌ {f.name}: {e}")
         st.divider()
 
+    # --- Αναδημιουργία Αναφορών ---
+    if od_token:
+        with st.expander("🔄 Αναδημιουργία Αναφορών (YTD fix)"):
+            st.caption(
+                "Βρίσκει μήνες που έχουν **raw + classified** στο OneDrive και "
+                "αναδημιουργεί το monthly report με σωστό YTD υπόλοιπο αδειών."
+            )
+            try:
+                _regen_raw_files = od.list_files(od_token, subfolder="raw")
+                _regen_out_files = od.list_files(od_token, subfolder="output")
+
+                # Βρες μήνες που έχουν raw_attendance_{year}_{MM}.xlsx στο "raw"
+                import re as _re
+                _regen_months = []
+                for _rf in _regen_raw_files:
+                    _m = _re.match(r"raw_attendance_(\d{4})_(\d{2})\.xlsx", _rf["name"])
+                    if _m:
+                        _ry, _rm = int(_m.group(1)), int(_m.group(2))
+                        _cls_name = f"classified_absences_{_ry}_{_rm:02d}.xlsx"
+                        _has_cls = any(f["name"] == _cls_name for f in _regen_out_files)
+                        _regen_months.append((_ry, _rm, _has_cls))
+
+                _regen_months.sort()
+
+                if not _regen_months:
+                    st.info("Δεν βρέθηκαν raw αρχεία στο OneDrive (subfolder: raw).")
+                else:
+                    _ready = [(_y, _m) for _y, _m, _ok in _regen_months if _ok]
+                    _missing_cls = [(_y, _m) for _y, _m, _ok in _regen_months if not _ok]
+
+                    if _missing_cls:
+                        st.warning(
+                            "Οι παρακάτω μήνες έχουν raw αλλά **όχι classified** — δεν μπορούν να αναδημιουργηθούν: "
+                            + ", ".join(f"{MONTHS[_m]} {_y}" for _y, _m in _missing_cls)
+                        )
+
+                    if _ready:
+                        st.write(
+                            "**Έτοιμοι για αναδημιουργία:** "
+                            + ", ".join(f"{MONTHS[_m]} {_y}" for _y, _m in _ready)
+                        )
+
+                        if st.button("🔄 Αναδημιουργία Όλων", type="primary"):
+                            try:
+                                # Φόρτωση employees
+                                _regen_emp_bytes = od.download_file(od_token, "employees.xlsx", subfolder="config")
+                                _regen_emp_tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                                _regen_emp_tmp.write(_regen_emp_bytes); _regen_emp_tmp.close()
+                                _regen_employees = load_employees(Path(_regen_emp_tmp.name))
+
+                                # Φόρτωση ΟΛΩΝ των classified για YTD (μία φορά)
+                                _regen_all_cls = {}
+                                for _cy, _cm, _cok in _regen_months:
+                                    if _cok:
+                                        _cn = f"classified_absences_{_cy}_{_cm:02d}.xlsx"
+                                        _cb = od.download_file(od_token, _cn, subfolder="output")
+                                        _ct = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                                        _ct.write(_cb); _ct.close()
+                                        _regen_all_cls[(_cy, _cm)] = load_classified_absences(Path(_ct.name))
+
+                                _regen_progress = st.progress(0)
+                                _regen_status = st.empty()
+
+                                for _idx, (_ry, _rm) in enumerate(_ready):
+                                    _regen_status.info(f"Επεξεργασία {MONTHS[_rm]} {_ry}...")
+
+                                    # Raw
+                                    _regen_raw_b = od.download_file(od_token, f"raw_attendance_{_ry}_{_rm:02d}.xlsx", subfolder="raw")
+                                    _regen_raw_t = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                                    _regen_raw_t.write(_regen_raw_b); _regen_raw_t.close()
+
+                                    _regen_raw_df = load_attendance(Path(_regen_raw_t.name))
+                                    _regen_df = clean_attendance(_regen_raw_df)
+
+                                    _regen_cls = _regen_all_cls.get((_ry, _rm), pd.DataFrame())
+
+                                    # YTD: όλοι οι προηγούμενοι μήνες του ίδιου έτους
+                                    _regen_ytd = _regen_cls.copy()
+                                    for _pm in range(1, _rm):
+                                        _prev = _regen_all_cls.get((_ry, _pm), pd.DataFrame())
+                                        if not _prev.empty:
+                                            _regen_ytd = pd.concat([_prev, _regen_ytd], ignore_index=True)
+
+                                    _regen_abs = find_absences(_regen_df, _regen_employees, _ry, _rm)
+                                    _regen_wd = calculate_work_days(_regen_df, _ry, _rm)
+                                    _regen_ot_d, _regen_ot_s = calculate_overtime(_regen_df.copy(), _ry, _rm)
+                                    _regen_leaves = build_leave_summary(_regen_ytd, _regen_employees, _ry, _rm)
+                                    _regen_val = build_validation_report(_regen_raw_df, _regen_df, _regen_employees, _regen_abs, _regen_cls, _ry, _rm)
+                                    _regen_alerts = build_alerts_report(_regen_employees, _regen_abs, _regen_cls, _regen_wd, _regen_ot_s, _regen_leaves, _ry)
+
+                                    _regen_report = excel_bytes({
+                                        "Απουσίες": _regen_abs,
+                                        "Ημέρες": _regen_wd,
+                                        "Υπερωρίες": _regen_ot_d,
+                                        "Σύνολο Extra": _regen_ot_s,
+                                        "Άδειες": _regen_leaves,
+                                        "Validation": _regen_val,
+                                        "Alerts": _regen_alerts,
+                                    })
+
+                                    od.upload_file(od_token, f"monthly_report_{_ry}_{_rm:02d}.xlsx", _regen_report)
+
+                                    _regen_progress.progress((_idx + 1) / len(_ready))
+
+                                _regen_status.success(f"✅ Αναδημιουργήθηκαν {len(_ready)} αναφορές!")
+                            except Exception as _regen_err:
+                                st.error(f"❌ Σφάλμα: {_regen_err}")
+                    else:
+                        st.info("Δεν υπάρχουν μήνες με raw + classified.")
+            except Exception as _e:
+                st.error(f"Σφάλμα φόρτωσης λίστας OneDrive: {_e}")
+        st.divider()
+
     # --- employees.xlsx από config ---
     if od_token:
         try:
