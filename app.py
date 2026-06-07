@@ -1085,19 +1085,40 @@ with tab_balances:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
     else:
         def _balance_color(val):
-            if not isinstance(val, (int, float)):
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
                 return ""
-            if val <= 3:
+            if v <= 3:
                 return "color: #c0392b; font-weight: bold"
-            elif val <= 7:
+            elif v <= 7:
                 return "color: #b7770d; font-weight: bold"
             return "color: #1a7a3c; font-weight: bold"
 
-        def _render_table(df, balance_col="Υπόλοιπο"):
-            return df.style.map(_balance_color, subset=[balance_col])
+        def _to_display(df: pd.DataFrame) -> pd.DataFrame:
+            """Μετατρέπει nullable / exotic dtypes σε standard Python types
+            ώστε το pandas Styler να μην κολλάει."""
+            out = df.copy()
+            for col in out.columns:
+                dtype_str = str(out[col].dtype)
+                if dtype_str in ("Int64", "Int32", "Int16", "Int8",
+                                 "UInt64", "UInt32", "UInt16", "UInt8"):
+                    out[col] = out[col].astype(object).where(out[col].notna(), other=None)
+            return out
+
+        def _show_table(df, balance_col, col_cfg):
+            display = _to_display(df)
+            try:
+                styled = display.style.map(_balance_color, subset=[balance_col])
+                st.dataframe(styled, use_container_width=True,
+                             hide_index=True, column_config=col_cfg)
+            except Exception:
+                # Fallback χωρίς styling αν κάτι πάει στραβά
+                st.dataframe(display, use_container_width=True,
+                             hide_index=True, column_config=col_cfg)
 
         _col_cfg_curr = {
-            "Υποκατ.": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "Υποκατ.":      st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
             "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
             "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
             "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
@@ -1106,7 +1127,7 @@ with tab_balances:
             "Υπόλοιπο":     st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
         }
         _col_cfg_prev = {
-            "Υποκατ.": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "Υποκατ.":      st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
             "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
             "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
             "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
@@ -1118,12 +1139,7 @@ with tab_balances:
         # Τρέχον έτος
         st.subheader(f"📅 Τρέχον Έτος{f' {leaves_year}' if leaves_year else ''}")
         curr_table = leave_balance_table_current(leaves_df)
-        st.dataframe(
-            _render_table(curr_table),
-            use_container_width=True,
-            hide_index=True,
-            column_config=_col_cfg_curr,
-        )
+        _show_table(curr_table, "Υπόλοιπο", _col_cfg_curr)
 
         # Προηγούμενο έτος — Ιανουάριος έως Απρίλιος
         if 1 <= leaves_month <= 4:
@@ -1133,12 +1149,7 @@ with tab_balances:
                 prev_year = int(leaves_year) - 1 if leaves_year else ""
                 st.subheader(f"📅 Προηγούμενο Έτος{f' {prev_year}' if prev_year else ''}")
                 st.caption("⚠️ Το υπόλοιπο λήγει στο τέλος Μαρτίου.")
-                st.dataframe(
-                    _render_table(prev_table),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=_col_cfg_prev,
-                )
+                _show_table(prev_table, "Υπόλοιπο", _col_cfg_prev)
 
         # Δεκέμβριος — προεπισκόπηση υπολοίπου που μεταφέρεται στο επόμενο έτος
         if leaves_month == 12:
@@ -1148,9 +1159,4 @@ with tab_balances:
                 next_year = int(leaves_year) + 1 if leaves_year else ""
                 st.subheader(f"📅 Μεταφορά υπολοίπου στο {next_year}")
                 st.caption("Οι παρακάτω εργαζόμενοι έχουν υπόλοιπο που μεταφέρεται στο νέο έτος (λήγει τέλος Μαρτίου).")
-                st.dataframe(
-                    _render_table(carryover),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=_col_cfg_curr,
-                )
+                _show_table(carryover, "Υπόλοιπο", _col_cfg_curr)
