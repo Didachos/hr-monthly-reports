@@ -169,11 +169,14 @@ def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
     for _, r in leaves.iterrows():
         curr_taken = int(r["Κανονική Άδεια από Τρέχον Έτος"])
         curr_total = int(r["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
+        balance = int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"])
         rows.append({
+            "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
-            "Χρησιμοποιήθηκαν/Σύνολο": f"{curr_taken}/{curr_total}",
-            "Υπόλοιπο": int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"]),
+            "Δικαιούμενες": curr_total,
+            "Ληφθείσες": curr_taken,
+            "Υπόλοιπο": balance,
         })
     return pd.DataFrame(rows)
 
@@ -183,11 +186,14 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
     for _, r in leaves.iterrows():
         prev_taken = int(r["Κανονική Άδεια από Προηγούμενο Έτος"])
         prev_available = int(r["Υπόλοιπο Προηγούμενου Έτους"])
+        balance = int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"])
         rows.append({
+            "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
-            "Χρησιμοποιήθηκαν/Διαθέσιμο": f"{prev_taken}/{prev_available}",
-            "Υπόλοιπο": int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"]),
+            "Διαθέσιμες": prev_available,
+            "Ληφθείσες": prev_taken,
+            "Υπόλοιπο": balance,
         })
     return pd.DataFrame(rows)
 
@@ -1061,22 +1067,48 @@ with tab_balances:
     if leaves_df is None:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
     else:
-        def color_balance(val):
-            if isinstance(val, int):
-                if val <= 3:
-                    return "color: red"
-                elif val <= 7:
-                    return "color: orange"
-                return "color: green"
-            return ""
+        def _balance_color(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            if val <= 3:
+                return "background-color: #ffd6d6; color: #c0392b; font-weight: bold"
+            elif val <= 7:
+                return "background-color: #fff3cd; color: #856404; font-weight: bold"
+            return "background-color: #d4edda; color: #155724; font-weight: bold"
+
+        def _render_table(df, balance_col="Υπόλοιπο"):
+            return (
+                df.style
+                .map(_balance_color, subset=[balance_col])
+                .set_properties(**{"text-align": "center"}, subset=df.columns[3:])
+                .set_properties(**{"text-align": "left"}, subset=df.columns[:3])
+            )
+
+        _col_cfg_curr = {
+            "ΑΦΜ":        st.column_config.TextColumn("ΑΦΜ", width=110),
+            "Επώνυμο":    st.column_config.TextColumn("Επώνυμο", width=130),
+            "Όνομα":      st.column_config.TextColumn("Όνομα", width=110),
+            "Δικαιούμενες": st.column_config.NumberColumn("Δικαιούμενες", width=110, format="%d ημ."),
+            "Ληφθείσες":  st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
+            "Υπόλοιπο":   st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
+        }
+        _col_cfg_prev = {
+            "ΑΦΜ":        st.column_config.TextColumn("ΑΦΜ", width=110),
+            "Επώνυμο":    st.column_config.TextColumn("Επώνυμο", width=130),
+            "Όνομα":      st.column_config.TextColumn("Όνομα", width=110),
+            "Διαθέσιμες": st.column_config.NumberColumn("Διαθέσιμες", width=110, format="%d ημ."),
+            "Ληφθείσες":  st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
+            "Υπόλοιπο":   st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
+        }
 
         # Τρέχον έτος
         st.subheader(f"📅 Τρέχον Έτος{f' {leaves_year}' if leaves_year else ''}")
         curr_table = leave_balance_table_current(leaves_df)
         st.dataframe(
-            curr_table.style.map(color_balance, subset=["Υπόλοιπο"]),
+            _render_table(curr_table),
             use_container_width=True,
             hide_index=True,
+            column_config=_col_cfg_curr,
         )
 
         # Προηγούμενο έτος — Ιανουάριος έως Απρίλιος
@@ -1088,9 +1120,10 @@ with tab_balances:
                 st.subheader(f"📅 Προηγούμενο Έτος{f' {prev_year}' if prev_year else ''}")
                 st.caption("⚠️ Το υπόλοιπο λήγει στο τέλος Μαρτίου.")
                 st.dataframe(
-                    prev_table.style.map(color_balance, subset=["Υπόλοιπο"]),
+                    _render_table(prev_table),
                     use_container_width=True,
                     hide_index=True,
+                    column_config=_col_cfg_prev,
                 )
 
         # Δεκέμβριος — προεπισκόπηση υπολοίπου που μεταφέρεται στο επόμενο έτος
@@ -1102,7 +1135,8 @@ with tab_balances:
                 st.subheader(f"📅 Μεταφορά υπολοίπου στο {next_year}")
                 st.caption("Οι παρακάτω εργαζόμενοι έχουν υπόλοιπο που μεταφέρεται στο νέο έτος (λήγει τέλος Μαρτίου).")
                 st.dataframe(
-                    carryover.style.map(color_balance, subset=["Υπόλοιπο"]),
+                    _render_table(carryover),
                     use_container_width=True,
                     hide_index=True,
+                    column_config=_col_cfg_curr,
                 )
