@@ -1461,9 +1461,18 @@ def _run(year: int, month: int) -> None:
 
     classified = load_classified_absences(classified_file)
 
+    # Φόρτωση όλων των προηγούμενων μηνών για YTD υπολογισμό υπολοίπου
+    classified_ytd = classified.copy()
+    for prev_month in range(1, month):
+        prev_classified_file = root / f"data/output/classified_absences_{year}_{prev_month:02d}.xlsx"
+        if prev_classified_file.exists():
+            prev_cls = load_classified_absences(prev_classified_file)
+            if not prev_cls.empty:
+                classified_ytd = pd.concat([prev_cls, classified_ytd], ignore_index=True)
+
     workdays = calculate_work_days(df, year, month)
     overtime_d, overtime_s = calculate_overtime(df.copy(), year, month)
-    leaves = build_leave_summary(classified, employees, year, month)
+    leaves = build_leave_summary(classified_ytd, employees, year, month)
 
     alerts = build_alerts_report(
         employees=employees,
