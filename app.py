@@ -171,6 +171,7 @@ def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
         curr_total = int(r["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
         balance = int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"])
         rows.append({
+            "Υποκατάστημα": int(r["ΑΑ Παραρτηματος"]) if pd.notna(r["ΑΑ Παραρτηματος"]) else "",
             "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
@@ -178,7 +179,9 @@ def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
             "Ληφθείσες": curr_taken,
             "Υπόλοιπο": balance,
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Υποκατάστημα", kind="stable").reset_index(drop=True)
+    return df
 
 
 def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
@@ -188,6 +191,7 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
         prev_available = int(r["Υπόλοιπο Προηγούμενου Έτους"])
         balance = int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"])
         rows.append({
+            "Υποκατάστημα": int(r["ΑΑ Παραρτηματος"]) if pd.notna(r["ΑΑ Παραρτηματος"]) else "",
             "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
@@ -195,7 +199,9 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
             "Ληφθείσες": prev_taken,
             "Υπόλοιπο": balance,
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Υποκατάστημα", kind="stable").reset_index(drop=True)
+    return df
 
 
 # =========================
@@ -1071,34 +1077,31 @@ with tab_balances:
             if not isinstance(val, (int, float)):
                 return ""
             if val <= 3:
-                return "background-color: #ffd6d6; color: #c0392b; font-weight: bold"
+                return "color: #c0392b; font-weight: bold"
             elif val <= 7:
-                return "background-color: #fff3cd; color: #856404; font-weight: bold"
-            return "background-color: #d4edda; color: #155724; font-weight: bold"
+                return "color: #b7770d; font-weight: bold"
+            return "color: #1a7a3c; font-weight: bold"
 
         def _render_table(df, balance_col="Υπόλοιπο"):
-            return (
-                df.style
-                .map(_balance_color, subset=[balance_col])
-                .set_properties(**{"text-align": "center"}, subset=df.columns[3:])
-                .set_properties(**{"text-align": "left"}, subset=df.columns[:3])
-            )
+            return df.style.map(_balance_color, subset=[balance_col])
 
         _col_cfg_curr = {
-            "ΑΦΜ":        st.column_config.TextColumn("ΑΦΜ", width=110),
-            "Επώνυμο":    st.column_config.TextColumn("Επώνυμο", width=130),
-            "Όνομα":      st.column_config.TextColumn("Όνομα", width=110),
+            "Υποκατάστημα": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
+            "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
+            "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
             "Δικαιούμενες": st.column_config.NumberColumn("Δικαιούμενες", width=110, format="%d ημ."),
-            "Ληφθείσες":  st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
-            "Υπόλοιπο":   st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
+            "Ληφθείσες":    st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
+            "Υπόλοιπο":     st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
         }
         _col_cfg_prev = {
-            "ΑΦΜ":        st.column_config.TextColumn("ΑΦΜ", width=110),
-            "Επώνυμο":    st.column_config.TextColumn("Επώνυμο", width=130),
-            "Όνομα":      st.column_config.TextColumn("Όνομα", width=110),
-            "Διαθέσιμες": st.column_config.NumberColumn("Διαθέσιμες", width=110, format="%d ημ."),
-            "Ληφθείσες":  st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
-            "Υπόλοιπο":   st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
+            "Υποκατάστημα": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
+            "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
+            "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
+            "Διαθέσιμες":   st.column_config.NumberColumn("Διαθέσιμες", width=110, format="%d ημ."),
+            "Ληφθείσες":    st.column_config.NumberColumn("Ληφθείσες", width=100, format="%d ημ."),
+            "Υπόλοιπο":     st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
         }
 
         # Τρέχον έτος
