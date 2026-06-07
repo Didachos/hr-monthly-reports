@@ -164,6 +164,15 @@ def ergani_excel_bytes(df: pd.DataFrame, sheet_name: str = "DAILY") -> bytes:
     return buf.getvalue()
 
 
+def _branch_val(raw):
+    """Επιστρέφει int αν είναι αριθμός, αλλιώς pd.NA (ώστε sort_values να δουλεύει)."""
+    try:
+        v = float(raw)
+        return int(v) if not pd.isna(v) else pd.NA
+    except (TypeError, ValueError):
+        return pd.NA
+
+
 def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for _, r in leaves.iterrows():
@@ -171,7 +180,7 @@ def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
         curr_total = int(r["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"])
         balance = int(r["Υπόλοιπο Τρέχοντος Έτους Μετά"])
         rows.append({
-            "Υποκατάστημα": int(r["ΑΑ Παραρτηματος"]) if pd.notna(r["ΑΑ Παραρτηματος"]) else "",
+            "Υποκατ.": _branch_val(r.get("ΑΑ Παραρτηματος")),
             "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
@@ -180,7 +189,8 @@ def leave_balance_table_current(leaves: pd.DataFrame) -> pd.DataFrame:
             "Υπόλοιπο": balance,
         })
     df = pd.DataFrame(rows)
-    df = df.sort_values("Υποκατάστημα", kind="stable").reset_index(drop=True)
+    df["Υποκατ."] = pd.array(df["Υποκατ."], dtype="Int64")
+    df = df.sort_values("Υποκατ.", na_position="last", kind="stable").reset_index(drop=True)
     return df
 
 
@@ -191,7 +201,7 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
         prev_available = int(r["Υπόλοιπο Προηγούμενου Έτους"])
         balance = int(r["Υπόλοιπο Προηγούμενου Έτους Μετά"])
         rows.append({
-            "Υποκατάστημα": int(r["ΑΑ Παραρτηματος"]) if pd.notna(r["ΑΑ Παραρτηματος"]) else "",
+            "Υποκατ.": _branch_val(r.get("ΑΑ Παραρτηματος")),
             "ΑΦΜ": str(r["ΑΦΜ"]),
             "Επώνυμο": r["Επώνυμο"],
             "Όνομα": r["Όνομα"],
@@ -200,7 +210,8 @@ def leave_balance_table_prev(leaves: pd.DataFrame) -> pd.DataFrame:
             "Υπόλοιπο": balance,
         })
     df = pd.DataFrame(rows)
-    df = df.sort_values("Υποκατάστημα", kind="stable").reset_index(drop=True)
+    df["Υποκατ."] = pd.array(df["Υποκατ."], dtype="Int64")
+    df = df.sort_values("Υποκατ.", na_position="last", kind="stable").reset_index(drop=True)
     return df
 
 
@@ -1086,7 +1097,7 @@ with tab_balances:
             return df.style.map(_balance_color, subset=[balance_col])
 
         _col_cfg_curr = {
-            "Υποκατάστημα": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "Υποκατ.": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
             "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
             "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
             "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
@@ -1095,7 +1106,7 @@ with tab_balances:
             "Υπόλοιπο":     st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
         }
         _col_cfg_prev = {
-            "Υποκατάστημα": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
+            "Υποκατ.": st.column_config.NumberColumn("Υποκατ.", width=80, format="%d"),
             "ΑΦΜ":          st.column_config.TextColumn("ΑΦΜ", width=110),
             "Επώνυμο":      st.column_config.TextColumn("Επώνυμο", width=130),
             "Όνομα":        st.column_config.TextColumn("Όνομα", width=110),
