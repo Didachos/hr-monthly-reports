@@ -433,6 +433,13 @@ with tab_run:
     # Φόρτωση classified από OneDrive αν υπάρχει
     od_token_cls = st.session_state.get("od_token")
     cls_filename = f"classified_absences_{year}_{month:02d}.xlsx"
+
+    # Αν άλλαξε μήνας/έτος, καθάρισε cached classified bytes
+    _cls_cache_key = f"classified_od_{year}_{month:02d}"
+    if st.session_state.get("_cls_cache_key") != _cls_cache_key:
+        st.session_state.pop("classified_od_bytes", None)
+        st.session_state["_cls_cache_key"] = _cls_cache_key
+
     if od_token_cls:
         try:
             od_files = od.list_files(od_token_cls, subfolder="output")
@@ -441,7 +448,9 @@ with tab_run:
                 col_a, col_b = st.columns(2)
                 with col_a:
                     if st.button("✅ Χρησιμοποίησε από OneDrive"):
-                        classified_bytes = od.download_file(od_token_cls, cls_filename, subfolder="output")
+                        st.session_state["classified_od_bytes"] = od.download_file(
+                            od_token_cls, cls_filename, subfolder="output"
+                        )
                         st.success("Φορτώθηκε από OneDrive!")
                 with col_b:
                     classified_file = st.file_uploader("Ή ανέβασε νέο αρχείο", type=["xlsx"], key="cls_upload")
@@ -451,6 +460,10 @@ with tab_run:
             classified_file = st.file_uploader(cls_filename, type=["xlsx"], key="cls_upload")
     else:
         classified_file = st.file_uploader(cls_filename, type=["xlsx"], key="cls_upload")
+
+    # Ανάκτηση cached classified bytes από session_state
+    if not classified_file:
+        classified_bytes = st.session_state.get("classified_od_bytes")
 
     st.divider()
 
