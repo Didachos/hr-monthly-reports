@@ -384,48 +384,41 @@ with tab_run:
 
     st.subheader("Αρχεία Εισόδου")
 
-    # Raw attendance: upload ή φόρτωση από OneDrive
+    # Raw attendance: upload ή αυτόματη φόρτωση από OneDrive
     _raw_od_token = st.session_state.get("od_token")
     _raw_filename = f"raw_attendance_{year}_{month:02d}.xlsx"
     _raw_cache_key = f"raw_od_{year}_{month:02d}"
+
+    # Καθαρισμός cache αν άλλαξε μήνας/έτος
     if st.session_state.get("_raw_cache_key") != _raw_cache_key:
         st.session_state.pop("raw_od_bytes", None)
         st.session_state["_raw_cache_key"] = _raw_cache_key
 
-    raw_file = st.file_uploader("Αρχείο παρουσίας (.xlsx)", type=["xlsx"])
-
-    if not raw_file and _raw_od_token:
+    # Αυτόματη φόρτωση από OneDrive αν δεν έχει ήδη φορτωθεί
+    if _raw_od_token and "raw_od_bytes" not in st.session_state:
         try:
             _raw_od_files = od.list_files(_raw_od_token, subfolder="raw")
             if any(f["name"] == _raw_filename for f in _raw_od_files):
-                if "raw_od_bytes" not in st.session_state or st.session_state.get("_raw_cache_key") != _raw_cache_key:
-                    pass
-                _raw_od_bytes = st.session_state.get("raw_od_bytes")
-                if _raw_od_bytes:
-                    st.success(f"☁️ Χρησιμοποιείται το `{_raw_filename}` από OneDrive.")
-                else:
-                    st.info(f"☁️ Βρέθηκε `{_raw_filename}` στο OneDrive.")
-                    if st.button("✅ Χρησιμοποίησε raw από OneDrive", key="raw_od_btn"):
-                        st.session_state["raw_od_bytes"] = od.download_file(
-                            _raw_od_token, _raw_filename, subfolder="raw"
-                        )
-                        st.rerun()
+                st.session_state["raw_od_bytes"] = od.download_file(
+                    _raw_od_token, _raw_filename, subfolder="raw"
+                )
         except Exception:
             pass
 
-    # Αν το raw έχει φορτωθεί από OneDrive, δημιούργησε ένα ψευδο-αντικείμενο
-    if not raw_file:
-        _raw_od_bytes = st.session_state.get("raw_od_bytes")
-        if _raw_od_bytes:
-            class _FakeFile:
-                def __init__(self, data, name):
-                    self._data = data
-                    self.name = name
-                def getvalue(self):
-                    return self._data
-                def read(self):
-                    return self._data
-            raw_file = _FakeFile(_raw_od_bytes, _raw_filename)
+    raw_file = st.file_uploader("Αρχείο παρουσίας (.xlsx)", type=["xlsx"])
+
+    # Αν δεν ανέβηκε αρχείο, χρησιμοποίησε το cached από OneDrive
+    if not raw_file and st.session_state.get("raw_od_bytes"):
+        class _FakeFile:
+            def __init__(self, data, name):
+                self._data = data
+                self.name = name
+            def getvalue(self):
+                return self._data
+            def read(self):
+                return self._data
+        raw_file = _FakeFile(st.session_state["raw_od_bytes"], _raw_filename)
+        st.success(f"☁️ Χρησιμοποιείται το `{_raw_filename}` από OneDrive.")
 
     # --- employees.xlsx: αυτόματη φόρτωση από OneDrive (subfolder "config") ---
     _od_emp_token = st.session_state.get("od_token")
