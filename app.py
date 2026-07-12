@@ -1267,6 +1267,27 @@ with tab_balances:
             _emp_order["_br"] = pd.to_numeric(_emp_order["ΑΑ Παραρτηματος"], errors="coerce")
             _emp_order = _emp_order.sort_values(["_br", "Επώνυμο", "Όνομα"], na_position="last")
 
+            # Κουμπί λήψης αναλυτικής λίστας σε Excel (σέβεται το φίλτρο)
+            if not _det_view.empty:
+                _dl = _det_view.merge(
+                    _emp_order[["ΑΦΜ", "_br"]], on="ΑΦΜ", how="left"
+                ).sort_values(["_br", "Επώνυμο", "Όνομα", "Ημ/νία"], na_position="last")
+                _dl_out = pd.DataFrame({
+                    "Υποκατάστημα": _dl["_br"].apply(lambda x: int(x) if pd.notna(x) else ""),
+                    "ΑΦΜ": _dl["ΑΦΜ"].astype(str),
+                    "Επώνυμο": _dl["Επώνυμο"],
+                    "Όνομα": _dl["Όνομα"],
+                    "Ημέρα": _dl["Ημ/νία"].apply(format_greek_date),
+                    "Τύπος Άδειας": _dl["Τύπος Απουσίας"],
+                })
+                st.download_button(
+                    label="⬇ Λήψη αναλυτικής λίστας (Excel)",
+                    data=excel_bytes({"Αναλυτικές Απουσίες": _dl_out}),
+                    file_name=f"analytika_apousies_{leaves_year}_{leaves_month:02d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="detail_excel_dl",
+                )
+
             _shown = 0
             for _, _emp in _emp_order.iterrows():
                 _afm = str(_emp["ΑΦΜ"])
