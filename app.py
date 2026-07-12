@@ -1279,6 +1279,12 @@ with tab_balances:
                     "Όνομα": _dl["Όνομα"],
                     "Ημέρα": _dl["Ημ/νία"].apply(format_greek_date),
                     "Τύπος Άδειας": _dl["Τύπος Απουσίας"],
+                    "Έτος Άδειας": _dl.apply(
+                        lambda r: int(r["Έτος Άδειας"])
+                        if (r["Τύπος Απουσίας"] == "Κανονική άδεια" and pd.notna(r.get("Έτος Άδειας")))
+                        else "",
+                        axis=1,
+                    ),
                 })
                 st.download_button(
                     label="⬇ Λήψη αναλυτικής λίστας (Excel)",
@@ -1305,12 +1311,18 @@ with tab_balances:
                     for _lt, _grp in _emp_days.groupby("Τύπος Απουσίας", sort=False):
                         _icon = LEAVE_TYPE_ICON.get(_lt, "📌")
                         _cnt = len(_grp)
+                        _is_annual = _lt == "Κανονική άδεια"
+                        _has_year_col = "Έτος Άδειας" in _grp.columns
                         st.markdown(f"**{_icon} {_lt}** — {_cnt} ημέρ{'α' if _cnt == 1 else 'ες'}")
-                        _lines = "\n".join(
-                            f"- {format_greek_date(_d)}"
-                            for _d in _grp["Ημ/νία"]
-                        )
-                        st.markdown(_lines)
+                        _grp_lines = []
+                        for _, _row in _grp.iterrows():
+                            _date_str = format_greek_date(_row["Ημ/νία"])
+                            _yr = _row["Έτος Άδειας"] if _has_year_col else None
+                            if _is_annual and pd.notna(_yr):
+                                _grp_lines.append(f"- {_date_str}  ·  *άδεια έτους {int(_yr)}*")
+                            else:
+                                _grp_lines.append(f"- {_date_str}")
+                        st.markdown("\n".join(_grp_lines))
 
             if _shown == 0:
                 st.caption("Κανένας υπάλληλος δεν έχει απουσίες για το επιλεγμένο φίλτρο.")
