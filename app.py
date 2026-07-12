@@ -37,6 +37,29 @@ MONTHS = {
     10: "Οκτώβριος", 11: "Νοέμβριος", 12: "Δεκέμβριος",
 }
 
+# Ελληνικά ονόματα ημερών (Δευτέρα=0) και μηνών σε γενική (για "3 Οκτωβρίου")
+GREEK_DAYS = ["Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή"]
+GREEK_MONTHS_GEN = {
+    1: "Ιανουαρίου", 2: "Φεβρουαρίου", 3: "Μαρτίου", 4: "Απριλίου",
+    5: "Μαΐου", 6: "Ιουνίου", 7: "Ιουλίου", 8: "Αυγούστου",
+    9: "Σεπτεμβρίου", 10: "Οκτωβρίου", 11: "Νοεμβρίου", 12: "Δεκεμβρίου",
+}
+
+# Εικονίδια ανά τύπο άδειας (για πιο ευανάγνωστη λίστα)
+LEAVE_TYPE_ICON = {
+    "Κανονική άδεια": "🏖️",
+    "Άδεια ασθένειας (ανυπαίτιο κώλυμα παροχής εργασίας)": "🤒",
+    "Άδεια ασθενείας": "🤒",
+    "Άδεια άνευ αποδοχών": "💸",
+    "Άνευ αποδοχών άδεια": "💸",
+}
+
+
+def format_greek_date(ts) -> str:
+    """Μετατρέπει ημερομηνία σε 'Δευτέρα 3 Οκτωβρίου 2026'."""
+    ts = pd.to_datetime(ts)
+    return f"{GREEK_DAYS[ts.weekday()]} {ts.day} {GREEK_MONTHS_GEN[ts.month]} {ts.year}"
+
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "data/output"
 
@@ -584,10 +607,18 @@ with tab_run:
 
             st.subheader("Λήψη Αρχείων")
 
-            if not classified_file and not classified_bytes:
-                template = build_classified_absence_template(absences)
+            # Η κρίσιμη συνθήκη: έχει φορτωθεί classified ΜΕ πραγματικά δεδομένα;
+            _has_classified = not classified.empty
+
+            if not _has_classified:
+                # Δεν υπάρχουν ταξινομημένες απουσίες — δείξε template
                 template_bytes = build_classified_template_excel_bytes(absences)
-                st.info("Κατέβασε το template, συμπλήρωσε τις στήλες 'Τύπος Απουσίας' και 'Έτος Άδειας', και ανέβασέ το ξανά.")
+                if classified_file or classified_bytes:
+                    st.warning("⚠️ Το classified αρχείο δεν περιέχει συμπληρωμένες απουσίες (όλοι οι τύποι είναι κενοί). Συμπλήρωσε τη στήλη 'Τύπος Απουσίας' και ανέβασέ το ξανά.")
+                    # Καθάρισε το λάθος cached classified από OneDrive
+                    st.session_state.pop("classified_od_bytes", None)
+                else:
+                    st.info("Κατέβασε το template, συμπλήρωσε τις στήλες 'Τύπος Απουσίας' και 'Έτος Άδειας', και ανέβασέ το ξανά.")
                 st.download_button(
                     label="⬇ Κατέβασε classified_absences template",
                     data=template_bytes,
@@ -622,31 +653,32 @@ with tab_run:
                             file_name=f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
+                else:
+                    st.warning("⚠️ Δεν παράχθηκαν Ergani exports — έλεγξε αν οι τύποι απουσίας στο classified αντιστοιχούν σε κωδικούς Εργάνης.")
 
                 # Αποθήκευση αποτελεσμάτων για tab υπολοίπων
                 st.session_state["leaves"] = leaves
                 st.session_state["leaves_month"] = month
                 st.session_state["leaves_year"] = year
+                # Αναλυτικά δεδομένα (ανά ημέρα) για το per-employee dropdown
+                st.session_state["classified_detail"] = classified_ytd.copy()
 
-                # Auto-save στο OneDrive αν είναι συνδεδεμένο
+                # Auto-save στο OneDrive — μόνο αν το classified έχει πραγματικά δεδομένα
                 od_token = st.session_state.get("od_token")
-                if od_token and (classified_file or classified_bytes):
+                if od_token:
                     try:
                         with st.spinner("Αποθήκευση στο OneDrive..."):
-                            # Αποθήκευση raw attendance στο OneDrive (subfolder: raw)
                             od.upload_file(od_token, f"raw_attendance_{year}_{month:02d}.xlsx", raw_file.getvalue(), subfolder="raw")
-                            # Αποθήκευση classified (ώστε μελλοντικά μήνες να έχουν YTD δεδομένα)
                             _cls_save_bytes = classified_file.getvalue() if classified_file else classified_bytes
                             if _cls_save_bytes:
                                 od.upload_file(od_token, f"classified_absences_{year}_{month:02d}.xlsx", _cls_save_bytes, subfolder="output")
-                            # Αποθήκευση monthly report
                             od.upload_file(od_token, f"monthly_report_{year}_{month:02d}.xlsx", report_bytes)
                             if not ergani_df.empty:
                                 for branch_value, branch_df in ergani_df.groupby("ΑΑ Παραρτηματος", dropna=False):
                                     branch_out = branch_df.drop(columns=["ΑΑ Παραρτηματος"]).copy()
                                     branch_label = int(branch_value) if pd.notna(branch_value) else "unknown"
                                     od.upload_file(od_token, f"ergani_export_parartima_{branch_label}_{year}_{month:02d}.xlsx", ergani_excel_bytes(branch_out))
-                        st.success("✅ Αποθηκεύτηκε στο OneDrive! (output + raw)")
+                        st.success("✅ Αποθηκεύτηκε στο OneDrive!")
                     except Exception as e:
                         st.warning(f"⚠️ Δεν ήταν δυνατή η αποθήκευση στο OneDrive: {e}")
 
@@ -1082,6 +1114,8 @@ with tab_balances:
                         leaves_df = build_leave_summary(_bal_classified_all, _bal_employees, _bal_year, _bal_last_cls_month)
                         leaves_month = _bal_last_cls_month
                         leaves_year = _bal_year
+                        # Αναλυτικά δεδομένα για το per-employee dropdown
+                        st.session_state["classified_detail"] = _bal_classified_all.copy()
                         _missing = [m for m in range(1, _bal_last_cls_month + 1)
                                     if not any(f["name"] == f"classified_absences_{_bal_year}_{m:02d}.xlsx" for f in _bal_files)]
                         _note = f"📂 YTD classified — {_bal_last_cls_month} μήνες ({_bal_year})"
@@ -1203,3 +1237,59 @@ with tab_balances:
                 st.subheader(f"📅 Μεταφορά υπολοίπου στο {next_year}")
                 st.caption("Οι παρακάτω εργαζόμενοι έχουν υπόλοιπο που μεταφέρεται στο νέο έτος (λήγει τέλος Μαρτίου).")
                 _show_table(carryover, "Υπόλοιπο", _col_cfg_curr)
+
+        # ── Αναλυτικά ανά υπάλληλο: dropdown με τις ημέρες απουσίας ──
+        _detail = st.session_state.get("classified_detail")
+        st.divider()
+        st.subheader("🔍 Αναλυτικά ανά υπάλληλο")
+
+        if _detail is None or _detail.empty:
+            st.caption("Δεν υπάρχουν αναλυτικά δεδομένα απουσιών (φόρτωσε classified με συμπληρωμένους τύπους).")
+        else:
+            _det = _detail.copy()
+            _det["ΑΦΜ"] = _det["ΑΦΜ"].astype(str)
+            _det["Ημ/νία"] = pd.to_datetime(_det["Ημ/νία"], errors="coerce")
+            _det = _det.dropna(subset=["Ημ/νία"])
+
+            # Φίλτρο τύπου άδειας
+            _all_types = sorted(t for t in _det["Τύπος Απουσίας"].dropna().unique() if t)
+            _sel_types = st.multiselect(
+                "Φίλτρο τύπου άδειας (κενό = όλοι)",
+                options=_all_types,
+                default=[],
+                key="detail_type_filter",
+            )
+            _det_view = _det[_det["Τύπος Απουσίας"].isin(_sel_types)] if _sel_types else _det
+
+            # Σειρά υπαλλήλων: όπως στον πίνακα (υποκατάστημα → επώνυμο)
+            _emp_order = leaves_df[["ΑΦΜ", "Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος"]].copy()
+            _emp_order["ΑΦΜ"] = _emp_order["ΑΦΜ"].astype(str)
+            _emp_order["_br"] = pd.to_numeric(_emp_order["ΑΑ Παραρτηματος"], errors="coerce")
+            _emp_order = _emp_order.sort_values(["_br", "Επώνυμο", "Όνομα"], na_position="last")
+
+            _shown = 0
+            for _, _emp in _emp_order.iterrows():
+                _afm = str(_emp["ΑΦΜ"])
+                _emp_days = _det_view[_det_view["ΑΦΜ"] == _afm].sort_values("Ημ/νία")
+                if _emp_days.empty:
+                    continue
+                _shown += 1
+                _n = len(_emp_days)
+                _br = _emp["ΑΑ Παραρτηματος"]
+                _br_str = f" · Υποκ. {int(_br)}" if pd.notna(_br) else ""
+                _label = f"👤 {_emp['Επώνυμο']} {_emp['Όνομα']}{_br_str} · {_n} ημέρ{'α' if _n == 1 else 'ες'} απουσίας"
+
+                with st.expander(_label):
+                    # Ομαδοποίηση ανά τύπο άδειας
+                    for _lt, _grp in _emp_days.groupby("Τύπος Απουσίας", sort=False):
+                        _icon = LEAVE_TYPE_ICON.get(_lt, "📌")
+                        _cnt = len(_grp)
+                        st.markdown(f"**{_icon} {_lt}** — {_cnt} ημέρ{'α' if _cnt == 1 else 'ες'}")
+                        _lines = "\n".join(
+                            f"- {format_greek_date(_d)}"
+                            for _d in _grp["Ημ/νία"]
+                        )
+                        st.markdown(_lines)
+
+            if _shown == 0:
+                st.caption("Κανένας υπάλληλος δεν έχει απουσίες για το επιλεγμένο φίλτρο.")
