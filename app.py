@@ -1486,6 +1486,19 @@ with tab_balances:
     if leaves_df is None:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
     else:
+        # ── Διαχωρισμός ενεργών / αποχωρούντων (βάσει Ημερομηνίας Αποχώρησης) ──
+        _bal_today = datetime.date.today()
+        if "Ημερομηνία Αποχώρησης" in leaves_df.columns:
+            _dep_dates = pd.to_datetime(
+                leaves_df["Ημερομηνία Αποχώρησης"], dayfirst=True, errors="coerce"
+            )
+            _departed_mask = _dep_dates.notna() & (_dep_dates.dt.date <= _bal_today)
+        else:
+            _departed_mask = pd.Series(False, index=leaves_df.index)
+
+        leaves_active = leaves_df[~_departed_mask].reset_index(drop=True)
+        leaves_departed = leaves_df[_departed_mask].reset_index(drop=True)
+
         def _balance_color(val):
             try:
                 v = float(val)
@@ -1538,14 +1551,14 @@ with tab_balances:
             "Υπόλοιπο":     st.column_config.NumberColumn("Υπόλοιπο", width=100, format="%d ημ."),
         }
 
-        # Τρέχον έτος
+        # Τρέχον έτος (μόνο ενεργοί)
         st.subheader(f"📅 Τρέχον Έτος{f' {leaves_year}' if leaves_year else ''}")
-        curr_table = leave_balance_table_current(leaves_df)
+        curr_table = leave_balance_table_current(leaves_active)
         _show_table(curr_table, "Υπόλοιπο", _col_cfg_curr)
 
         # Προηγούμενο έτος — Ιανουάριος έως Απρίλιος
         if 1 <= leaves_month <= 4:
-            prev_table = leave_balance_table_prev(leaves_df)
+            prev_table = leave_balance_table_prev(leaves_active)
             has_prev_balance = prev_table["Υπόλοιπο"].sum() > 0
             if has_prev_balance:
                 prev_year = int(leaves_year) - 1 if leaves_year else ""
@@ -1555,7 +1568,7 @@ with tab_balances:
 
         # Δεκέμβριος — προεπισκόπηση υπολοίπου που μεταφέρεται στο επόμενο έτος
         if leaves_month == 12:
-            curr_table_dec = leave_balance_table_current(leaves_df)
+            curr_table_dec = leave_balance_table_current(leaves_active)
             carryover = curr_table_dec[curr_table_dec["Υπόλοιπο"] > 0]
             if not carryover.empty:
                 next_year = int(leaves_year) + 1 if leaves_year else ""
@@ -1586,13 +1599,18 @@ with tab_balances:
             )
             _det_view = _det[_det["Τύπος Απουσίας"].isin(_sel_types)] if _sel_types else _det
 
-            # Σειρά υπαλλήλων: όπως στον πίνακα (υποκατάστημα → επώνυμο)
-            _emp_order = leaves_df[["ΑΦΜ", "Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος"]].copy()
-            _emp_order["ΑΦΜ"] = _emp_order["ΑΦΜ"].astype(str)
-            _emp_order["_br"] = pd.to_numeric(_emp_order["ΑΑ Παραρτηματος"], errors="coerce")
-            _emp_order = _emp_order.sort_values(["_br", "Επώνυμο", "Όνομα"], na_position="last")
+            def _emp_order_of(_src: pd.DataFrame) -> pd.DataFrame:
+                _cols = ["ΑΦΜ", "Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος"]
+                if "Ημερομηνία Αποχώρησης" in _src.columns:
+                    _cols.append("Ημερομηνία Αποχώρησης")
+                _o = _src[_cols].copy()
+                _o["ΑΦΜ"] = _o["ΑΦΜ"].astype(str)
+                _o["_br"] = pd.to_numeric(_o["ΑΑ Παραρτηματος"], errors="coerce")
+                return _o.sort_values(["_br", "Επώνυμο", "Όνομα"], na_position="last")
 
-            # Κουμπί λήψης αναλυτικής λίστας σε Excel (σέβεται το φίλτρο)
+            _emp_order = _emp_order_of(leaves_df)  # όλοι (για λήψη Excel)
+
+            # Κουμπί λήψης αναλυτικής λίστας σε Excel (σέβεται το φίλτρο, όλοι)
             if not _det_view.empty:
                 _dl = _det_view.merge(
                     _emp_order[["ΑΦΜ", "_br"]], on="ΑΦΜ", how="left"
@@ -1619,35 +1637,67 @@ with tab_balances:
                     key="detail_excel_dl",
                 )
 
-            _shown = 0
-            for _, _emp in _emp_order.iterrows():
-                _afm = str(_emp["ΑΦΜ"])
-                _emp_days = _det_view[_det_view["ΑΦΜ"] == _afm].sort_values("Ημ/νία")
-                if _emp_days.empty:
-                    continue
-                _shown += 1
-                _n = len(_emp_days)
-                _br = _emp["ΑΑ Παραρτηματος"]
-                _br_str = f" · Υποκ. {int(_br)}" if pd.notna(_br) else ""
-                _label = f"👤 {_emp['Επώνυμο']} {_emp['Όνομα']}{_br_str} · {_n} ημέρ{'α' if _n == 1 else 'ες'} απουσίας"
+            def _render_detail(emp_rows: pd.DataFrame) -> int:
+                shown = 0
+                for _, _emp in emp_rows.iterrows():
+                    _afm = str(_emp["ΑΦΜ"])
+                    _emp_days = _det_view[_det_view["ΑΦΜ"] == _afm].sort_values("Ημ/νία")
+                    if _emp_days.empty:
+                        continue
+                    shown += 1
+                    _n = len(_emp_days)
+                    _br = _emp["ΑΑ Παραρτηματος"]
+                    _br_str = f" · Υποκ. {int(_br)}" if pd.notna(_br) else ""
+                    _dep = _emp.get("Ημερομηνία Αποχώρησης", "")
+                    _dep_str = f" · 🚪 αποχώρηση {_dep}" if isinstance(_dep, str) and _dep.strip() else ""
+                    _label = (f"👤 {_emp['Επώνυμο']} {_emp['Όνομα']}{_br_str}{_dep_str} · "
+                              f"{_n} ημέρ{'α' if _n == 1 else 'ες'} απουσίας")
+                    with st.expander(_label):
+                        for _lt, _grp in _emp_days.groupby("Τύπος Απουσίας", sort=False):
+                            _icon = LEAVE_TYPE_ICON.get(_lt, "📌")
+                            _cnt = len(_grp)
+                            _is_annual = _lt == "Κανονική άδεια"
+                            _has_year_col = "Έτος Άδειας" in _grp.columns
+                            st.markdown(f"**{_icon} {_lt}** — {_cnt} ημέρ{'α' if _cnt == 1 else 'ες'}")
+                            _grp_lines = []
+                            for _, _row in _grp.iterrows():
+                                _date_str = format_greek_date(_row["Ημ/νία"])
+                                _yr = _row["Έτος Άδειας"] if _has_year_col else None
+                                if _is_annual and pd.notna(_yr):
+                                    _grp_lines.append(f"- {_date_str}  ·  *άδεια έτους {int(_yr)}*")
+                                else:
+                                    _grp_lines.append(f"- {_date_str}")
+                            st.markdown("\n".join(_grp_lines))
+                return shown
 
-                with st.expander(_label):
-                    # Ομαδοποίηση ανά τύπο άδειας
-                    for _lt, _grp in _emp_days.groupby("Τύπος Απουσίας", sort=False):
-                        _icon = LEAVE_TYPE_ICON.get(_lt, "📌")
-                        _cnt = len(_grp)
-                        _is_annual = _lt == "Κανονική άδεια"
-                        _has_year_col = "Έτος Άδειας" in _grp.columns
-                        st.markdown(f"**{_icon} {_lt}** — {_cnt} ημέρ{'α' if _cnt == 1 else 'ες'}")
-                        _grp_lines = []
-                        for _, _row in _grp.iterrows():
-                            _date_str = format_greek_date(_row["Ημ/νία"])
-                            _yr = _row["Έτος Άδειας"] if _has_year_col else None
-                            if _is_annual and pd.notna(_yr):
-                                _grp_lines.append(f"- {_date_str}  ·  *άδεια έτους {int(_yr)}*")
-                            else:
-                                _grp_lines.append(f"- {_date_str}")
-                        st.markdown("\n".join(_grp_lines))
-
+            # Ενεργοί
+            _shown = _render_detail(_emp_order_of(leaves_active))
             if _shown == 0:
-                st.caption("Κανένας υπάλληλος δεν έχει απουσίες για το επιλεγμένο φίλτρο.")
+                st.caption("Κανένας ενεργός υπάλληλος δεν έχει απουσίες για το επιλεγμένο φίλτρο.")
+
+            # Αποχωρούντες — διατηρείται το ιστορικό τους
+            _dep_rows = _emp_order_of(leaves_departed) if not leaves_departed.empty else pd.DataFrame()
+
+            # Δίχτυ ασφαλείας: υπάλληλοι που αφαιρέθηκαν τελείως από το employees.xlsx
+            # αλλά έχουν ιστορικό απουσιών στο classified
+            _known_afms = set(leaves_df["ΑΦΜ"].astype(str))
+            _orphan = _det[~_det["ΑΦΜ"].astype(str).isin(_known_afms)]
+            if not _orphan.empty:
+                _orphan_rows = (
+                    _orphan[["ΑΦΜ", "Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος"]]
+                    .drop_duplicates(subset=["ΑΦΜ"]).copy()
+                )
+                _orphan_rows["ΑΦΜ"] = _orphan_rows["ΑΦΜ"].astype(str)
+                _orphan_rows["Ημερομηνία Αποχώρησης"] = ""
+                _orphan_rows["_br"] = pd.to_numeric(_orphan_rows["ΑΑ Παραρτηματος"], errors="coerce")
+                _dep_rows = pd.concat([_dep_rows, _orphan_rows], ignore_index=True) if not _dep_rows.empty else _orphan_rows
+
+            if not _dep_rows.empty:
+                _dep_rows = _dep_rows.sort_values(["_br", "Επώνυμο", "Όνομα"], na_position="last")
+                st.divider()
+                st.subheader("🚪 Αποχωρούντες")
+                st.caption("Το ιστορικό απουσιών όσων έχουν αποχωρήσει διατηρείται εδώ "
+                           "(δεν προσμετρώνται στα τρέχοντα υπόλοιπα).")
+                _shown_dep = _render_detail(_dep_rows)
+                if _shown_dep == 0:
+                    st.caption("Οι αποχωρούντες δεν έχουν καταγεγραμμένες απουσίες για το επιλεγμένο φίλτρο.")
