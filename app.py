@@ -626,26 +626,30 @@ with tab_dashboard:
     _dash_planned = load_planned_df()
     _dash_leaves = st.session_state.get("leaves")
 
+    _today_ts = pd.Timestamp(_dash_today)
+
     # Ενεργοί υπάλληλοι (χωρίς αποχώρηση)
     _dash_active_emp = None
     if _dash_emp is not None and not _dash_emp.empty:
         _dep = pd.to_datetime(_dash_emp.get("Ημερομηνία Αποχώρησης"), errors="coerce")
-        _dash_active_emp = _dash_emp[_dep.isna() | (_dep.dt.date > _dash_today)]
+        _dash_active_emp = _dash_emp[_dep.isna() | (_dep > _today_ts)]
 
     # Εβδομάδα (Δευτ–Κυρ)
     _week_start = _dash_today - datetime.timedelta(days=_dash_today.weekday())
     _week_end = _week_start + datetime.timedelta(days=6)
+    _week_start_ts = pd.Timestamp(_week_start)
+    _week_end_ts = pd.Timestamp(_week_end)
 
     # --- Προγραμματισμένες άδειες: σήμερα / εβδομάδα ---
     _off_today = pd.DataFrame()
     _off_week = pd.DataFrame()
     if _dash_planned is not None and not _dash_planned.empty:
         _p = _dash_planned.copy()
-        _p["Ημ/νία"] = pd.to_datetime(_p["Ημ/νία"], errors="coerce")
-        _off_today = _p[_p["Ημ/νία"].dt.date == _dash_today]
+        _p["Ημ/νία"] = pd.to_datetime(_p["Ημ/νία"], errors="coerce").dt.normalize()
+        _off_today = _p[_p["Ημ/νία"] == _today_ts]
         _off_week = _p[
-            (_p["Ημ/νία"].dt.date >= _week_start) &
-            (_p["Ημ/νία"].dt.date <= _week_end)
+            (_p["Ημ/νία"] >= _week_start_ts) &
+            (_p["Ημ/νία"] <= _week_end_ts)
         ]
 
     # --- Χαμηλό υπόλοιπο (ενεργοί) ---
@@ -654,7 +658,7 @@ with tab_dashboard:
         _lb = _dash_leaves.copy()
         if "Ημερομηνία Αποχώρησης" in _lb.columns:
             _lbdep = pd.to_datetime(_lb["Ημερομηνία Αποχώρησης"], dayfirst=True, errors="coerce")
-            _lb = _lb[_lbdep.isna() | (_lbdep.dt.date > _dash_today)]
+            _lb = _lb[_lbdep.isna() | (_lbdep > _today_ts)]
         if "Υπόλοιπο Τρέχοντος Έτους Μετά" in _lb.columns:
             _lb["_bal"] = pd.to_numeric(_lb["Υπόλοιπο Τρέχοντος Έτους Μετά"], errors="coerce").fillna(0)
             _low_balance = _lb[_lb["_bal"] <= 3]
@@ -1337,7 +1341,7 @@ with tab_planned:
             st.info("Δεν υπάρχουν προγραμματισμένες άδειες ακόμα.")
         else:
             _view = _pl_df.copy()
-            _view["Ημ/νία"] = pd.to_datetime(_view["Ημ/νία"], errors="coerce")
+            _view["Ημ/νία"] = pd.to_datetime(_view["Ημ/νία"], errors="coerce").dt.normalize()
 
             _fc1, _fc2 = st.columns(2)
             with _fc1:
@@ -1346,8 +1350,8 @@ with tab_planned:
                 _range_to = st.date_input("Προβολή έως", value=_pl_today + datetime.timedelta(days=30), key="pl_view_to")
 
             _mask = (
-                (_view["Ημ/νία"].dt.date >= _range_from) &
-                (_view["Ημ/νία"].dt.date <= _range_to)
+                (_view["Ημ/νία"] >= pd.Timestamp(_range_from)) &
+                (_view["Ημ/νία"] <= pd.Timestamp(_range_to))
             )
             _period = _view[_mask].sort_values(["Ημ/νία", "ΑΑ Παραρτηματος", "Επώνυμο"])
 
@@ -1892,7 +1896,7 @@ with tab_balances:
             _dep_dates = pd.to_datetime(
                 leaves_df["Ημερομηνία Αποχώρησης"], dayfirst=True, errors="coerce"
             )
-            _departed_mask = _dep_dates.notna() & (_dep_dates.dt.date <= _bal_today)
+            _departed_mask = _dep_dates.notna() & (_dep_dates <= pd.Timestamp(_bal_today))
         else:
             _departed_mask = pd.Series(False, index=leaves_df.index)
 
