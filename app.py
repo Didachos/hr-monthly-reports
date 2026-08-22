@@ -458,9 +458,141 @@ with st.sidebar:
         else:
             st.info("Δεν έχουν οριστεί OneDrive credentials.")
 
-tab_run, tab_planned, tab_history, tab_balances = st.tabs(
-    ["▶ Εκτέλεση", "📆 Προγραμματισμένες Άδειες", "📁 Ιστορικό", "📊 Υπόλοιπα Αδειών"]
+tab_dashboard, tab_run, tab_planned, tab_history, tab_balances = st.tabs(
+    ["🏠 Επισκόπηση", "▶ Εκτέλεση", "📆 Προγραμματισμένες Άδειες", "📁 Ιστορικό", "📊 Υπόλοιπα Αδειών"]
 )
+
+
+# =========================
+# TAB: ΕΠΙΣΚΟΠΗΣΗ (DASHBOARD)
+# =========================
+
+with tab_dashboard:
+    _dash_today = datetime.date.today()
+    _gr_full_date = format_greek_date(pd.Timestamp(_dash_today))
+    st.subheader(f"🏠 Επισκόπηση — {_gr_full_date}")
+
+    _dash_emp = get_employees_df()
+    _dash_planned = load_planned_df()
+    _dash_leaves = st.session_state.get("leaves")
+
+    # Ενεργοί υπάλληλοι (χωρίς αποχώρηση)
+    _dash_active_emp = None
+    if _dash_emp is not None and not _dash_emp.empty:
+        _dep = pd.to_datetime(_dash_emp.get("Ημερομηνία Αποχώρησης"), errors="coerce")
+        _dash_active_emp = _dash_emp[_dep.isna() | (_dep.dt.date > _dash_today)]
+
+    # Εβδομάδα (Δευτ–Κυρ)
+    _week_start = _dash_today - datetime.timedelta(days=_dash_today.weekday())
+    _week_end = _week_start + datetime.timedelta(days=6)
+
+    # --- Προγραμματισμένες άδειες: σήμερα / εβδομάδα ---
+    _off_today = pd.DataFrame()
+    _off_week = pd.DataFrame()
+    if _dash_planned is not None and not _dash_planned.empty:
+        _p = _dash_planned.copy()
+        _p["Ημ/νία"] = pd.to_datetime(_p["Ημ/νία"], errors="coerce")
+        _off_today = _p[_p["Ημ/νία"].dt.date == _dash_today]
+        _off_week = _p[
+            (_p["Ημ/νία"].dt.date >= _week_start) &
+            (_p["Ημ/νία"].dt.date <= _week_end)
+        ]
+
+    # --- Χαμηλό υπόλοιπο (ενεργοί) ---
+    _low_balance = pd.DataFrame()
+    if _dash_leaves is not None and not _dash_leaves.empty:
+        _lb = _dash_leaves.copy()
+        if "Ημερομηνία Αποχώρησης" in _lb.columns:
+            _lbdep = pd.to_datetime(_lb["Ημερομηνία Αποχώρησης"], dayfirst=True, errors="coerce")
+            _lb = _lb[_lbdep.isna() | (_lbdep.dt.date > _dash_today)]
+        if "Υπόλοιπο Τρέχοντος Έτους Μετά" in _lb.columns:
+            _lb["_bal"] = pd.to_numeric(_lb["Υπόλοιπο Τρέχοντος Έτους Μετά"], errors="coerce").fillna(0)
+            _low_balance = _lb[_lb["_bal"] <= 3]
+
+    # --- Εκκρεμείς εγκρίσεις ---
+    _pending = pd.DataFrame()
+    if _dash_planned is not None and not _dash_planned.empty:
+        _pending = _dash_planned[_dash_planned["Κατάσταση"] == "εκκρεμεί"]
+
+    # --- Metrics row ---
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric("👥 Ενεργοί υπάλληλοι",
+               len(_dash_active_emp) if _dash_active_emp is not None else "—")
+    _m2.metric("🌴 Λείπουν σήμερα", _off_today["ΑΦΜ"].nunique() if not _off_today.empty else 0)
+    _m3.metric("📅 Λείπουν αυτή την εβδομάδα", _off_week["ΑΦΜ"].nunique() if not _off_week.empty else 0)
+    _m4.metric("⚠️ Χαμηλό υπόλοιπο (≤3)", len(_low_balance) if not _low_balance.empty else 0)
+
+    st.divider()
+
+    def _dash_person_line(row):
+        _br = row.get("ΑΑ Παραρτηματος")
+        _br_s = f"[Υποκ. {int(_br)}] " if pd.notna(_br) else ""
+        _icon = LEAVE_TYPE_ICON.get(row.get("Τύπος Απουσίας", ""), "📌")
+        _st = row.get("Κατάσταση", "")
+        _st_s = "" if _st == "εγκρίθηκε" else f" *({_st})*"
+        return f"- {_br_s}**{row['Επώνυμο']} {row['Όνομα']}** · {_icon} {row.get('Τύπος Απουσίας','')}{_st_s}"
+
+    _dc1, _dc2 = st.columns(2)
+
+    with _dc1:
+        st.markdown("### 🌴 Λείπουν σήμερα")
+        if _off_today.empty:
+            st.caption("Κανείς δεν λείπει σήμερα. 🎉")
+        else:
+            _rows = _off_today.sort_values(["ΑΑ Παραρτηματος", "Επώνυμο"])
+            st.markdown("\n".join(_dash_person_line(r) for _, r in _rows.iterrows()))
+
+    with _dc2:
+        st.markdown("### 📅 Αυτή την εβδομάδα")
+        if _off_week.empty:
+            st.caption("Καμία προγραμματισμένη άδεια αυτή την εβδομάδα.")
+        else:
+            _wk = _off_week.copy()
+            _wk["Ημ/νία"] = pd.to_datetime(_wk["Ημ/νία"], errors="coerce")
+            for _day, _grp in _wk.groupby(_wk["Ημ/νία"].dt.date):
+                _names = ", ".join(
+                    f"{r['Επώνυμο']} {r['Όνομα']}"
+                    for _, r in _grp.sort_values(["ΑΑ Παραρτηματος", "Επώνυμο"]).iterrows()
+                )
+                st.markdown(f"**{format_greek_date(pd.Timestamp(_day))}** — {_names}")
+
+    st.divider()
+
+    _dc3, _dc4 = st.columns(2)
+
+    with _dc3:
+        st.markdown("### ⚠️ Χαμηλό υπόλοιπο")
+        if _low_balance.empty:
+            if _dash_leaves is None:
+                st.caption("Άνοιξε την καρτέλα «Υπόλοιπα Αδειών» για να φορτωθούν τα δεδομένα.")
+            else:
+                st.caption("Κανείς με χαμηλό υπόλοιπο. ✅")
+        else:
+            _lbv = _low_balance.sort_values("_bal")
+            for _, r in _lbv.iterrows():
+                _br = r.get("ΑΑ Παραρτηματος")
+                _br_s = f"[Υποκ. {int(_br)}] " if pd.notna(_br) else ""
+                _bal = int(r["_bal"])
+                _color = "🔴" if _bal <= 1 else "🟠"
+                st.markdown(f"- {_color} {_br_s}**{r['Επώνυμο']} {r['Όνομα']}** · υπόλοιπο **{_bal}** ημέρες")
+
+    with _dc4:
+        st.markdown("### ✅ Εκκρεμείς εγκρίσεις")
+        if _pending.empty:
+            st.caption("Καμία εκκρεμής έγκριση.")
+        else:
+            _pv = _pending.copy()
+            _pv["Ημ/νία"] = pd.to_datetime(_pv["Ημ/νία"], errors="coerce")
+            _grouped = (
+                _pv.groupby(["ΑΦΜ", "Επώνυμο", "Όνομα", "Τύπος Απουσίας"])
+                .agg(_from=("Ημ/νία", "min"), _to=("Ημ/νία", "max"), _n=("Ημ/νία", "size"))
+                .reset_index()
+            )
+            for _, r in _grouped.iterrows():
+                _rng = (format_greek_date(r["_from"]) if r["_n"] == 1
+                        else f"{format_greek_date(r['_from'])} → {format_greek_date(r['_to'])}")
+                st.markdown(f"- **{r['Επώνυμο']} {r['Όνομα']}** · {r['Τύπος Απουσίας']} · {_rng} ({int(r['_n'])} ημ.)")
+            st.caption("Η έγκριση γίνεται από την καρτέλα «Προγραμματισμένες Άδειες».")
 
 
 # =========================
