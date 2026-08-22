@@ -806,117 +806,126 @@ with tab_planned:
             _label = f"{_br_s}{_e['Επώνυμο']} {_e['Όνομα']} — {_e['ΑΦΜ']}"
             _emp_opts[_label] = str(_e["ΑΦΜ"])
 
-        _sel_emp_label = st.selectbox("Υπάλληλος", options=list(_emp_opts.keys()), key="pl_emp")
-        _sel_afm = _emp_opts.get(_sel_emp_label)
-        _sel_emp_row = _pl_employees[_pl_employees["ΑΦΜ"].astype(str) == str(_sel_afm)].iloc[0]
-
-        _types_list = ["Κανονική άδεια"] + sorted(t for t in ERGANI_LEAVE_TYPES if t != "Κανονική άδεια")
-        _c1, _c2 = st.columns([2, 1])
-        with _c1:
-            _sel_type = st.selectbox("Τύπος άδειας", options=_types_list, key="pl_type")
-        with _c2:
-            _is_annual = _sel_type == "Κανονική άδεια"
-            if _is_annual:
-                _sel_leave_year = st.selectbox(
-                    "Έτος άδειας",
-                    options=[_pl_today.year, _pl_today.year - 1],
-                    key="pl_year",
-                )
-            else:
-                _sel_leave_year = None
-                st.caption("—")
-
-        _mode = st.radio("Τρόπος δήλωσης", options=["Εύρος ημερομηνιών", "Μεμονωμένες ημέρες"],
-                         horizontal=True, key="pl_mode")
-
-        _selected_days = []
-        if _mode == "Εύρος ημερομηνιών":
-            _dc1, _dc2 = st.columns(2)
-            with _dc1:
-                _from = st.date_input("Από", value=_pl_today, key="pl_from")
-            with _dc2:
-                _to = st.date_input("Έως", value=_pl_today, key="pl_to")
-            _selected_days = working_days_in_range(_from, _to)
-            if _selected_days:
-                st.caption(f"📅 {len(_selected_days)} εργάσιμες ημέρες (εξαιρούνται ΣΚ + αργίες)")
+        _sel_emp_label = st.selectbox(
+            "Υπάλληλος",
+            options=list(_emp_opts.keys()),
+            index=None,
+            placeholder="Επίλεξε υπάλληλο…",
+            key="pl_emp",
+        )
+        if not _sel_emp_label:
+            st.caption("Επίλεξε υπάλληλο για να δηλώσεις νέα άδεια.")
         else:
-            _stage = st.session_state.setdefault("pl_staged_days", [])
-            _sc1, _sc2 = st.columns([2, 1])
-            with _sc1:
-                _new_day = st.date_input("Πρόσθεσε ημέρα", value=_pl_today, key="pl_single")
-            with _sc2:
-                st.write("")
-                st.write("")
-                if st.button("➕ Πρόσθεσε", key="pl_add_day"):
-                    _iso = _new_day.isoformat()
-                    if _iso not in _stage:
-                        _stage.append(_iso)
-                        _stage.sort()
-            if _stage:
-                st.caption("Επιλεγμένες ημέρες: " + ", ".join(
-                    format_greek_date(d) for d in _stage
-                ))
-                if st.button("🗑️ Καθαρισμός ημερών", key="pl_clear_days"):
-                    st.session_state["pl_staged_days"] = []
-                    st.rerun()
-            _selected_days = [pd.to_datetime(d).normalize() for d in _stage]
+            _sel_afm = _emp_opts.get(_sel_emp_label)
+            _sel_emp_row = _pl_employees[_pl_employees["ΑΦΜ"].astype(str) == str(_sel_afm)].iloc[0]
 
-        _sel_status = st.selectbox("Κατάσταση", options=["εγκρίθηκε", "εκκρεμεί"], key="pl_status")
-
-        # ── Έλεγχος υπολοίπου (μόνο για κανονική άδεια) ────────────────
-        if _is_annual and _selected_days:
-            _req = len(_selected_days)
-            _avail = None
-            if _pl_leaves is not None:
-                _lrow = _pl_leaves[_pl_leaves["ΑΦΜ"].astype(str) == str(_sel_afm)]
-                if not _lrow.empty:
-                    _lrow = _lrow.iloc[0]
-                    if _sel_leave_year == _pl_today.year:
-                        _avail = int(_lrow.get("Υπόλοιπο Τρέχοντος Έτους Μετά", 0))
-                    elif _sel_leave_year == _pl_today.year - 1:
-                        _avail = int(_lrow.get("Υπόλοιπο Προηγούμενου Έτους Μετά", 0))
-            if _avail is not None:
-                # Αφαίρεσε ήδη προγραμματισμένες κανονικές άδειες ίδιου έτους
-                _already = _pl_df[
-                    (_pl_df["ΑΦΜ"].astype(str) == str(_sel_afm)) &
-                    (_pl_df["Τύπος Απουσίας"] == "Κανονική άδεια") &
-                    (_pl_df["Έτος Άδειας"] == _sel_leave_year)
-                ]
-                _net_avail = _avail - len(_already)
-                if _req > _net_avail:
-                    st.error(f"⚠️ Ζητούνται **{_req}** ημέρες αλλά διαθέσιμο υπόλοιπο **{_net_avail}** "
-                             f"(υπόλοιπο {_avail} − {len(_already)} ήδη προγραμματισμένες).")
+            _types_list = ["Κανονική άδεια"] + sorted(t for t in ERGANI_LEAVE_TYPES if t != "Κανονική άδεια")
+            _c1, _c2 = st.columns([2, 1])
+            with _c1:
+                _sel_type = st.selectbox("Τύπος άδειας", options=_types_list, key="pl_type")
+            with _c2:
+                _is_annual = _sel_type == "Κανονική άδεια"
+                if _is_annual:
+                    _sel_leave_year = st.selectbox(
+                        "Έτος άδειας",
+                        options=[_pl_today.year, _pl_today.year - 1],
+                        key="pl_year",
+                    )
                 else:
-                    st.success(f"✅ Διαθέσιμο υπόλοιπο: {_net_avail} ημέρες (ζητούνται {_req}).")
-            else:
-                st.info("ℹ️ Δεν υπάρχουν δεδομένα υπολοίπου — τρέξε πρώτα την καρτέλα Υπόλοιπα για έλεγχο.")
+                    _sel_leave_year = None
+                    st.caption("—")
 
-        # ── Κουμπί καταχώρησης ─────────────────────────────────────────
-        if st.button("💾 Καταχώρηση άδειας", type="primary", disabled=not _selected_days):
-            try:
-                _new_rows = []
-                for _d in _selected_days:
-                    _new_rows.append({
-                        "ΑΑ Παραρτηματος": _sel_emp_row["ΑΑ Παραρτηματος"],
-                        "ΑΦΜ": str(_sel_afm),
-                        "Επώνυμο": _sel_emp_row["Επώνυμο"],
-                        "Όνομα": _sel_emp_row["Όνομα"],
-                        "Ημ/νία": pd.to_datetime(_d).normalize(),
-                        "Τύπος Απουσίας": _sel_type,
-                        "Έτος Άδειας": int(_sel_leave_year) if _is_annual else pd.NA,
-                        "Κατάσταση": _sel_status,
-                        "Καταχωρήθηκε": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    })
-                _new_df = pd.DataFrame(_new_rows)
-                _merged = pd.concat([_pl_df, _new_df], ignore_index=True)
-                # Νέα δήλωση υπερισχύει σε διπλότυπα (ΑΦΜ + Ημ/νία)
-                _merged = _merged.drop_duplicates(subset=["ΑΦΜ", "Ημ/νία"], keep="last").reset_index(drop=True)
-                save_planned_df(_merged)
-                st.session_state["pl_staged_days"] = []
-                st.success(f"✅ Καταχωρήθηκαν {len(_new_rows)} ημέρες για {_sel_emp_row['Επώνυμο']} {_sel_emp_row['Όνομα']}.")
-                st.rerun()
-            except Exception as _e:
-                st.error(f"Σφάλμα καταχώρησης: {_e}")
+            _mode = st.radio("Τρόπος δήλωσης", options=["Εύρος ημερομηνιών", "Μεμονωμένες ημέρες"],
+                             horizontal=True, key="pl_mode")
+
+            _selected_days = []
+            if _mode == "Εύρος ημερομηνιών":
+                _dc1, _dc2 = st.columns(2)
+                with _dc1:
+                    _from = st.date_input("Από", value=_pl_today, key="pl_from")
+                with _dc2:
+                    _to = st.date_input("Έως", value=_pl_today, key="pl_to")
+                _selected_days = working_days_in_range(_from, _to)
+                if _selected_days:
+                    st.caption(f"📅 {len(_selected_days)} εργάσιμες ημέρες (εξαιρούνται ΣΚ + αργίες)")
+            else:
+                _stage = st.session_state.setdefault("pl_staged_days", [])
+                _sc1, _sc2 = st.columns([2, 1])
+                with _sc1:
+                    _new_day = st.date_input("Πρόσθεσε ημέρα", value=_pl_today, key="pl_single")
+                with _sc2:
+                    st.write("")
+                    st.write("")
+                    if st.button("➕ Πρόσθεσε", key="pl_add_day"):
+                        _iso = _new_day.isoformat()
+                        if _iso not in _stage:
+                            _stage.append(_iso)
+                            _stage.sort()
+                if _stage:
+                    st.caption("Επιλεγμένες ημέρες: " + ", ".join(
+                        format_greek_date(d) for d in _stage
+                    ))
+                    if st.button("🗑️ Καθαρισμός ημερών", key="pl_clear_days"):
+                        st.session_state["pl_staged_days"] = []
+                        st.rerun()
+                _selected_days = [pd.to_datetime(d).normalize() for d in _stage]
+
+            _sel_status = st.selectbox("Κατάσταση", options=["εγκρίθηκε", "εκκρεμεί"], key="pl_status")
+
+            # ── Έλεγχος υπολοίπου (μόνο για κανονική άδεια) ────────────────
+            if _is_annual and _selected_days:
+                _req = len(_selected_days)
+                _avail = None
+                if _pl_leaves is not None:
+                    _lrow = _pl_leaves[_pl_leaves["ΑΦΜ"].astype(str) == str(_sel_afm)]
+                    if not _lrow.empty:
+                        _lrow = _lrow.iloc[0]
+                        if _sel_leave_year == _pl_today.year:
+                            _avail = int(_lrow.get("Υπόλοιπο Τρέχοντος Έτους Μετά", 0))
+                        elif _sel_leave_year == _pl_today.year - 1:
+                            _avail = int(_lrow.get("Υπόλοιπο Προηγούμενου Έτους Μετά", 0))
+                if _avail is not None:
+                    # Αφαίρεσε ήδη προγραμματισμένες κανονικές άδειες ίδιου έτους
+                    _already = _pl_df[
+                        (_pl_df["ΑΦΜ"].astype(str) == str(_sel_afm)) &
+                        (_pl_df["Τύπος Απουσίας"] == "Κανονική άδεια") &
+                        (_pl_df["Έτος Άδειας"] == _sel_leave_year)
+                    ]
+                    _net_avail = _avail - len(_already)
+                    if _req > _net_avail:
+                        st.error(f"⚠️ Ζητούνται **{_req}** ημέρες αλλά διαθέσιμο υπόλοιπο **{_net_avail}** "
+                                 f"(υπόλοιπο {_avail} − {len(_already)} ήδη προγραμματισμένες).")
+                    else:
+                        st.success(f"✅ Διαθέσιμο υπόλοιπο: {_net_avail} ημέρες (ζητούνται {_req}).")
+                else:
+                    st.info("ℹ️ Δεν υπάρχουν δεδομένα υπολοίπου — τρέξε πρώτα την καρτέλα Υπόλοιπα για έλεγχο.")
+
+            # ── Κουμπί καταχώρησης ─────────────────────────────────────────
+            if st.button("💾 Καταχώρηση άδειας", type="primary", disabled=not _selected_days):
+                try:
+                    _new_rows = []
+                    for _d in _selected_days:
+                        _new_rows.append({
+                            "ΑΑ Παραρτηματος": _sel_emp_row["ΑΑ Παραρτηματος"],
+                            "ΑΦΜ": str(_sel_afm),
+                            "Επώνυμο": _sel_emp_row["Επώνυμο"],
+                            "Όνομα": _sel_emp_row["Όνομα"],
+                            "Ημ/νία": pd.to_datetime(_d).normalize(),
+                            "Τύπος Απουσίας": _sel_type,
+                            "Έτος Άδειας": int(_sel_leave_year) if _is_annual else pd.NA,
+                            "Κατάσταση": _sel_status,
+                            "Καταχωρήθηκε": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        })
+                    _new_df = pd.DataFrame(_new_rows)
+                    _merged = pd.concat([_pl_df, _new_df], ignore_index=True)
+                    # Νέα δήλωση υπερισχύει σε διπλότυπα (ΑΦΜ + Ημ/νία)
+                    _merged = _merged.drop_duplicates(subset=["ΑΦΜ", "Ημ/νία"], keep="last").reset_index(drop=True)
+                    save_planned_df(_merged)
+                    st.session_state["pl_staged_days"] = []
+                    st.success(f"✅ Καταχωρήθηκαν {len(_new_rows)} ημέρες για {_sel_emp_row['Επώνυμο']} {_sel_emp_row['Όνομα']}.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Σφάλμα καταχώρησης: {_e}")
 
         st.divider()
 
