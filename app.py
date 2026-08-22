@@ -241,6 +241,69 @@ def build_calendar_html(planned_df: pd.DataFrame, year: int, month: int,
     return css + f'<table class="cal"><thead><tr>{head}</tr></thead><tbody>{rows_html}</tbody></table>'
 
 
+def compare_planned_actual(planned_df, classified, year: int, month: int):
+    """Συγκρίνει προγραμματισμένες άδειες με το πραγματικό classified του μήνα.
+
+    Επιστρέφει (planned_not_actual, actual_not_planned, type_mismatch) ως DataFrames
+    έτοιμα για εμφάνιση (με ελληνική ημερομηνία).
+    """
+    _empty = pd.DataFrame()
+
+    p = planned_df.copy() if planned_df is not None else pd.DataFrame(columns=PLANNED_LEAVES_COLUMNS)
+    if not p.empty:
+        p["Ημ/νία"] = pd.to_datetime(p["Ημ/νία"], errors="coerce")
+        p = p[(p["Ημ/νία"].dt.year == year) & (p["Ημ/νία"].dt.month == month)]
+    c = classified.copy() if classified is not None else pd.DataFrame()
+    if not c.empty:
+        c["Ημ/νία"] = pd.to_datetime(c["Ημ/νία"], errors="coerce")
+
+    _pcols = ["ΑΦΜ", "Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος", "Ημ/νία", "Τύπος Απουσίας"]
+    p2 = (p[_pcols].copy() if not p.empty else pd.DataFrame(columns=_pcols))
+    c2 = (c[_pcols].copy() if not c.empty else pd.DataFrame(columns=_pcols))
+    p2["ΑΦΜ"] = p2["ΑΦΜ"].astype(str)
+    c2["ΑΦΜ"] = c2["ΑΦΜ"].astype(str)
+    p2 = p2.rename(columns={"Τύπος Απουσίας": "Τύπος (δηλωμένο)"})
+    c2 = c2.rename(columns={"Τύπος Απουσίας": "Τύπος (πραγματικό)"})
+
+    m = p2.merge(
+        c2, on=["ΑΦΜ", "Ημ/νία"], how="outer", indicator=True,
+        suffixes=(" _p", " _c"),
+    )
+
+    def _coalesce(row, col):
+        _pv = row.get(f"{col} _p")
+        _cv = row.get(f"{col} _c")
+        return _pv if pd.notna(_pv) and str(_pv) != "" else _cv
+
+    for _col in ["Επώνυμο", "Όνομα", "ΑΑ Παραρτηματος"]:
+        m[_col] = m.apply(lambda r: _coalesce(r, _col), axis=1)
+
+    def _fmt(df):
+        if df.empty:
+            return df
+        out = pd.DataFrame({
+            "Υποκ.": df["ΑΑ Παραρτηματος"].apply(lambda x: int(x) if pd.notna(x) else ""),
+            "Επώνυμο": df["Επώνυμο"],
+            "Όνομα": df["Όνομα"],
+            "Ημέρα": df["Ημ/νία"].apply(format_greek_date),
+        })
+        if "Τύπος (δηλωμένο)" in df.columns:
+            out["Τύπος (δηλωμένο)"] = df["Τύπος (δηλωμένο)"]
+        if "Τύπος (πραγματικό)" in df.columns:
+            out["Τύπος (πραγματικό)"] = df["Τύπος (πραγματικό)"]
+        # Πέτα στήλες τύπου που είναι εντελώς κενές για τον συγκεκριμένο πίνακα
+        out = out.dropna(axis=1, how="all")
+        return out.sort_values(["Υποκ.", "Επώνυμο", "Ημέρα"]).reset_index(drop=True)
+
+    planned_not_actual = _fmt(m[m["_merge"] == "left_only"])
+    actual_not_planned = _fmt(m[m["_merge"] == "right_only"])
+    _both = m[m["_merge"] == "both"]
+    _mismatch = _both[_both["Τύπος (δηλωμένο)"].astype(str) != _both["Τύπος (πραγματικό)"].astype(str)]
+    type_mismatch = _fmt(_mismatch)
+
+    return planned_not_actual, actual_not_planned, type_mismatch
+
+
 def reconstruct_classified_from_ergani(
     ergani_files: list[tuple[int, bytes]]
 ) -> pd.DataFrame:
@@ -967,6 +1030,33 @@ with tab_run:
                         )
                 else:
                     st.warning("⚠️ Δεν παράχθηκαν Ergani exports — έλεγξε αν οι τύποι απουσίας στο classified αντιστοιχούν σε κωδικούς Εργάνης.")
+
+                # ── Έλεγχος: Προγραμματισμένο vs Πραγματικό ────────────
+                try:
+                    _pva_planned = load_planned_df()
+                    _pva_na, _pva_an, _pva_mm = compare_planned_actual(
+                        _pva_planned, classified, year, month
+                    )
+                    _pva_total = len(_pva_na) + len(_pva_an) + len(_pva_mm)
+                    with st.expander(f"🔍 Προγραμματισμένο vs Πραγματικό ({_pva_total} αποκλίσεις)",
+                                     expanded=_pva_total > 0):
+                        if _pva_total == 0:
+                            st.success("✅ Οι προγραμματισμένες άδειες συμφωνούν με το πραγματικό classified.")
+                        else:
+                            if not _pva_na.empty:
+                                st.markdown(f"**🟠 Δηλώθηκαν αλλά ΔΕΝ βρέθηκαν στο classified** ({len(_pva_na)})")
+                                st.caption("Πιθανόν ήρθε τελικά στη δουλειά ή δεν καταχωρήθηκε η απουσία.")
+                                st.dataframe(_pva_na, use_container_width=True, hide_index=True)
+                            if not _pva_an.empty:
+                                st.markdown(f"**🔵 Απουσίες χωρίς πρόβλεψη** ({len(_pva_an)})")
+                                st.caption("Υπάρχουν στο classified αλλά δεν είχαν δηλωθεί προγραμματισμένα.")
+                                st.dataframe(_pva_an, use_container_width=True, hide_index=True)
+                            if not _pva_mm.empty:
+                                st.markdown(f"**🔴 Διαφορετικός τύπος άδειας** ({len(_pva_mm)})")
+                                st.caption("Ο δηλωμένος τύπος διαφέρει από τον πραγματικό.")
+                                st.dataframe(_pva_mm, use_container_width=True, hide_index=True)
+                except Exception as _pva_err:
+                    st.caption(f"(Ο έλεγχος προγραμματισμένου vs πραγματικού απέτυχε: {_pva_err})")
 
                 # Αποθήκευση αποτελεσμάτων για tab υπολοίπων
                 st.session_state["leaves"] = leaves
