@@ -1,5 +1,7 @@
 import base64
+import calendar as _calendar
 import datetime
+import html as _html
 import io
 import sys
 import tempfile
@@ -27,6 +29,7 @@ from main import (
     find_absences,
     force_text_column,
     format_dates_for_excel,
+    get_holidays,
     load_attendance,
     load_classified_absences,
     load_employees,
@@ -152,6 +155,90 @@ def save_planned_df(df: pd.DataFrame):
         LOCAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         (LOCAL_CONFIG_DIR / PLANNED_FILENAME).write_bytes(data)
     st.session_state["planned_df"] = df
+
+
+# Παλέτα χρωμάτων ανά υποκατάστημα (λειτουργεί σε light & dark)
+BRANCH_COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7",
+                 "#f59e0b", "#06b6d4", "#ec4899", "#84cc16"]
+
+
+def _branch_color(branch) -> str:
+    try:
+        return BRANCH_COLORS[int(branch) % len(BRANCH_COLORS)]
+    except (TypeError, ValueError):
+        return "#9ca3af"
+
+
+def build_calendar_html(planned_df: pd.DataFrame, year: int, month: int,
+                        today: datetime.date | None = None) -> str:
+    """Φτιάχνει HTML ημερολόγιο μήνα με τις προγραμματισμένες απουσίες ανά ημέρα."""
+    today = today or datetime.date.today()
+    holidays_set = get_holidays(year)
+
+    # Χάρτης ημέρα -> λίστα (name, branch, type, status)
+    by_day: dict[int, list] = {}
+    if planned_df is not None and not planned_df.empty:
+        _p = planned_df.copy()
+        _p["Ημ/νία"] = pd.to_datetime(_p["Ημ/νία"], errors="coerce")
+        _p = _p[(_p["Ημ/νία"].dt.year == year) & (_p["Ημ/νία"].dt.month == month)]
+        for _, r in _p.iterrows():
+            by_day.setdefault(int(r["Ημ/νία"].day), []).append({
+                "name": f"{r['Επώνυμο']} {r['Όνομα']}",
+                "branch": r["ΑΑ Παραρτηματος"],
+                "type": r.get("Τύπος Απουσίας", ""),
+                "status": r.get("Κατάσταση", ""),
+            })
+
+    css = """
+    <style>
+    .cal { width:100%; border-collapse:collapse; table-layout:fixed; font-size:0.82rem; }
+    .cal th { padding:6px 4px; text-align:center; font-weight:600; opacity:0.7; }
+    .cal td { border:1px solid rgba(128,128,128,0.25); vertical-align:top;
+              height:96px; padding:4px; overflow:hidden; }
+    .cal .daynum { font-weight:700; opacity:0.65; font-size:0.78rem; }
+    .cal .off { display:block; background:rgba(128,128,128,0.10); }
+    .cal .today { outline:2px solid #3b82f6; outline-offset:-2px; }
+    .cal .person { display:flex; align-items:center; gap:4px; margin-top:2px;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .cal .dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+    .cal .pend { opacity:0.55; font-style:italic; }
+    </style>
+    """
+
+    head = "".join(f"<th>{d}</th>" for d in ["Δε", "Τρ", "Τε", "Πε", "Πα", "Σα", "Κυ"])
+    rows_html = ""
+    for week in _calendar.monthcalendar(year, month):
+        cells = ""
+        for i, day in enumerate(week):
+            if day == 0:
+                cells += "<td></td>"
+                continue
+            d = datetime.date(year, month, day)
+            is_weekend = i >= 5
+            is_holiday = pd.Timestamp(d).normalize() in holidays_set
+            is_today = d == today
+            people = by_day.get(day, [])
+
+            cls = "off" if people else ""
+            if is_today:
+                cls += " today"
+            cell_style = "opacity:0.55;" if (is_weekend or is_holiday) else ""
+
+            inner = f'<span class="daynum">{day}</span>'
+            shown = people[:4]
+            for p in shown:
+                col = _branch_color(p["branch"])
+                pend = " pend" if p["status"] != "εγκρίθηκε" else ""
+                nm = _html.escape(p["name"])
+                inner += (f'<span class="person{pend}" title="{nm} · {_html.escape(str(p["type"]))}">'
+                          f'<span class="dot" style="background:{col}"></span>{nm}</span>')
+            if len(people) > 4:
+                inner += f'<span class="person">+{len(people) - 4} ακόμη</span>'
+
+            cells += f'<td class="{cls.strip()}" style="{cell_style}">{inner}</td>'
+        rows_html += f"<tr>{cells}</tr>"
+
+    return css + f'<table class="cal"><thead><tr>{head}</tr></thead><tbody>{rows_html}</tbody></table>'
 
 
 def reconstruct_classified_from_ergani(
@@ -1117,6 +1204,38 @@ with tab_planned:
                         save_planned_df(_kept)
                         st.success(f"🗑️ Απορρίφθηκε: {_r['Επώνυμο']} {_r['Όνομα']}")
                         st.rerun()
+
+        st.divider()
+
+        # ── Οπτικό ημερολόγιο μήνα ─────────────────────────────────────
+        st.markdown("### 📅 Ημερολόγιο μήνα")
+        _cal_df = load_planned_df()
+        _cc1, _cc2 = st.columns(2)
+        with _cc1:
+            _cal_year = st.number_input("Έτος", min_value=2020, max_value=2100,
+                                        value=_pl_today.year, step=1, key="cal_year")
+        with _cc2:
+            _cal_month = st.selectbox("Μήνας", options=list(MONTHS.keys()),
+                                      format_func=lambda m: MONTHS[m],
+                                      index=_pl_today.month - 1, key="cal_month")
+
+        # Υπόμνημα χρωμάτων υποκαταστημάτων
+        _branches = sorted(
+            {int(b) for b in _cal_df["ΑΑ Παραρτηματος"].dropna().unique()}
+        ) if not _cal_df.empty else []
+        if _branches:
+            _legend = " &nbsp; ".join(
+                f'<span style="display:inline-flex;align-items:center;gap:4px">'
+                f'<span style="width:10px;height:10px;border-radius:50%;'
+                f'background:{_branch_color(b)};display:inline-block"></span>Υποκ. {b}</span>'
+                for b in _branches
+            )
+            st.markdown(_legend + " &nbsp;·&nbsp; *πλάγια = εκκρεμεί*", unsafe_allow_html=True)
+
+        st.markdown(
+            build_calendar_html(_cal_df, int(_cal_year), int(_cal_month), _pl_today),
+            unsafe_allow_html=True,
+        )
 
         st.divider()
 
