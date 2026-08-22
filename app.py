@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 import onedrive as od
 from main import (
     ERGANI_CODE_TO_DESCRIPTION,
+    ERGANI_LEAVE_TYPES,
+    PLANNED_LEAVES_COLUMNS,
     build_alerts_report,
     build_classified_absence_template,
     build_classified_template_excel_bytes,
@@ -28,6 +30,8 @@ from main import (
     load_attendance,
     load_classified_absences,
     load_employees,
+    load_planned_leaves,
+    working_days_in_range,
 )
 
 MONTHS = {
@@ -79,6 +83,75 @@ def excel_bytes(sheets: dict) -> bytes:
             format_dates_for_excel(df).to_excel(writer, sheet_name=sheet_name, index=False)
             force_text_column(writer.sheets[sheet_name], "ΑΦΜ")
     return buf.getvalue()
+
+
+# =========================
+# PLANNED LEAVES HELPERS
+# =========================
+
+PLANNED_FILENAME = "planned_leaves.xlsx"
+LOCAL_CONFIG_DIR = Path(__file__).resolve().parent / "data/config"
+
+
+def get_employees_df():
+    """Επιστρέφει το employees DataFrame από OneDrive bytes (ή None)."""
+    emp_bytes = st.session_state.get("employees_od_bytes")
+    od_token = st.session_state.get("od_token")
+    if emp_bytes is None and od_token:
+        try:
+            cfg = od.list_files(od_token, subfolder="config")
+            if any(f["name"] == "employees.xlsx" for f in cfg):
+                emp_bytes = od.download_file(od_token, "employees.xlsx", subfolder="config")
+                st.session_state["employees_od_bytes"] = emp_bytes
+        except Exception:
+            pass
+    if not emp_bytes:
+        return None
+    try:
+        t = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        t.write(emp_bytes); t.close()
+        return load_employees(Path(t.name))
+    except Exception:
+        return None
+
+
+def load_planned_df(force: bool = False):
+    """Φορτώνει planned leaves από OneDrive (config) ή τοπικά, με cache."""
+    if not force and "planned_df" in st.session_state:
+        return st.session_state["planned_df"]
+    od_token = st.session_state.get("od_token")
+    df = pd.DataFrame(columns=PLANNED_LEAVES_COLUMNS)
+    try:
+        if od_token:
+            files = od.list_files(od_token, subfolder="config")
+            if any(f["name"] == PLANNED_FILENAME for f in files):
+                b = od.download_file(od_token, PLANNED_FILENAME, subfolder="config")
+                t = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                t.write(b); t.close()
+                df = load_planned_leaves(Path(t.name))
+        else:
+            df = load_planned_leaves(LOCAL_CONFIG_DIR / PLANNED_FILENAME)
+    except Exception:
+        pass
+    st.session_state["planned_df"] = df
+    return df
+
+
+def save_planned_df(df: pd.DataFrame):
+    """Αποθηκεύει planned leaves (OneDrive config ή τοπικά) και ενημερώνει cache."""
+    df = df.copy()
+    for col in PLANNED_LEAVES_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    df = df[PLANNED_LEAVES_COLUMNS]
+    data = excel_bytes({"Προγραμματισμένες": df})
+    od_token = st.session_state.get("od_token")
+    if od_token:
+        od.upload_file(od_token, PLANNED_FILENAME, data, subfolder="config")
+    else:
+        LOCAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        (LOCAL_CONFIG_DIR / PLANNED_FILENAME).write_bytes(data)
+    st.session_state["planned_df"] = df
 
 
 def reconstruct_classified_from_ergani(
@@ -385,7 +458,9 @@ with st.sidebar:
         else:
             st.info("Δεν έχουν οριστεί OneDrive credentials.")
 
-tab_run, tab_history, tab_balances = st.tabs(["▶ Εκτέλεση", "📁 Ιστορικό", "📊 Υπόλοιπα Αδειών"])
+tab_run, tab_planned, tab_history, tab_balances = st.tabs(
+    ["▶ Εκτέλεση", "📆 Προγραμματισμένες Άδειες", "📁 Ιστορικό", "📊 Υπόλοιπα Αδειών"]
+)
 
 
 # =========================
@@ -612,11 +687,29 @@ with tab_run:
 
             if not _has_classified:
                 # Δεν υπάρχουν ταξινομημένες απουσίες — δείξε template
-                template_bytes = build_classified_template_excel_bytes(absences)
+                # Auto-fill από προγραμματισμένες άδειες του μήνα
+                _prefill = None
+                try:
+                    _planned_all = load_planned_df()
+                    if not _planned_all.empty:
+                        _pa = _planned_all.copy()
+                        _pa["Ημ/νία"] = pd.to_datetime(_pa["Ημ/νία"], errors="coerce")
+                        _prefill = _pa[
+                            (_pa["Ημ/νία"].dt.year == year) &
+                            (_pa["Ημ/νία"].dt.month == month)
+                        ][["ΑΦΜ", "Ημ/νία", "Τύπος Απουσίας", "Έτος Άδειας"]]
+                except Exception:
+                    _prefill = None
+
+                template_bytes = build_classified_template_excel_bytes(absences, prefill=_prefill)
                 if classified_file or classified_bytes:
                     st.warning("⚠️ Το classified αρχείο δεν περιέχει συμπληρωμένες απουσίες (όλοι οι τύποι είναι κενοί). Συμπλήρωσε τη στήλη 'Τύπος Απουσίας' και ανέβασέ το ξανά.")
                     # Καθάρισε το λάθος cached classified από OneDrive
                     st.session_state.pop("classified_od_bytes", None)
+                elif _prefill is not None and not _prefill.empty:
+                    _matched = _prefill["ΑΦΜ"].astype(str).isin(absences["ΑΦΜ"].astype(str)).sum()
+                    st.success(f"✨ Το template προσυμπληρώθηκε αυτόματα από {len(_prefill)} προγραμματισμένες άδειες. "
+                               "Έλεγξε/συμπλήρωσε τα υπόλοιπα και ανέβασέ το ξανά.")
                 else:
                     st.info("Κατέβασε το template, συμπλήρωσε τις στήλες 'Τύπος Απουσίας' και 'Έτος Άδειας', και ανέβασέ το ξανά.")
                 st.download_button(
@@ -684,6 +777,229 @@ with tab_run:
 
         except Exception as e:
             st.error(f"Σφάλμα: {e}")
+
+
+# =========================
+# TAB: ΠΡΟΓΡΑΜΜΑΤΙΣΜΕΝΕΣ ΑΔΕΙΕΣ
+# =========================
+
+with tab_planned:
+    st.subheader("📆 Προγραμματισμένες Άδειες")
+    st.caption("Δήλωσε εκ των προτέρων τις άδειες ώστε να ξέρεις ποιοι θα λείπουν. "
+               "Όταν έρθει η ώρα επεξεργασίας του μήνα, προσυμπληρώνουν αυτόματα το classified.")
+
+    _pl_employees = get_employees_df()
+    _pl_df = load_planned_df()
+    _pl_leaves = st.session_state.get("leaves")  # για έλεγχο υπολοίπου (αν υπάρχει)
+    _pl_today = datetime.date.today()
+
+    if _pl_employees is None or _pl_employees.empty:
+        st.warning("⚠️ Δεν βρέθηκε το employees.xlsx. Σύνδεσε OneDrive ή ανέβασέ το από την καρτέλα Εκτέλεση.")
+    else:
+        # ── Φόρμα καταχώρησης ──────────────────────────────────────────
+        st.markdown("### ➕ Νέα δήλωση άδειας")
+
+        _emp_opts = {}
+        for _, _e in _pl_employees.sort_values(["ΑΑ Παραρτηματος", "Επώνυμο", "Όνομα"]).iterrows():
+            _br = _e["ΑΑ Παραρτηματος"]
+            _br_s = f"[Υποκ. {int(_br)}] " if pd.notna(_br) else ""
+            _label = f"{_br_s}{_e['Επώνυμο']} {_e['Όνομα']} — {_e['ΑΦΜ']}"
+            _emp_opts[_label] = str(_e["ΑΦΜ"])
+
+        _sel_emp_label = st.selectbox("Υπάλληλος", options=list(_emp_opts.keys()), key="pl_emp")
+        _sel_afm = _emp_opts.get(_sel_emp_label)
+        _sel_emp_row = _pl_employees[_pl_employees["ΑΦΜ"].astype(str) == str(_sel_afm)].iloc[0]
+
+        _types_list = ["Κανονική άδεια"] + sorted(t for t in ERGANI_LEAVE_TYPES if t != "Κανονική άδεια")
+        _c1, _c2 = st.columns([2, 1])
+        with _c1:
+            _sel_type = st.selectbox("Τύπος άδειας", options=_types_list, key="pl_type")
+        with _c2:
+            _is_annual = _sel_type == "Κανονική άδεια"
+            if _is_annual:
+                _sel_leave_year = st.selectbox(
+                    "Έτος άδειας",
+                    options=[_pl_today.year, _pl_today.year - 1],
+                    key="pl_year",
+                )
+            else:
+                _sel_leave_year = None
+                st.caption("—")
+
+        _mode = st.radio("Τρόπος δήλωσης", options=["Εύρος ημερομηνιών", "Μεμονωμένες ημέρες"],
+                         horizontal=True, key="pl_mode")
+
+        _selected_days = []
+        if _mode == "Εύρος ημερομηνιών":
+            _dc1, _dc2 = st.columns(2)
+            with _dc1:
+                _from = st.date_input("Από", value=_pl_today, key="pl_from")
+            with _dc2:
+                _to = st.date_input("Έως", value=_pl_today, key="pl_to")
+            _selected_days = working_days_in_range(_from, _to)
+            if _selected_days:
+                st.caption(f"📅 {len(_selected_days)} εργάσιμες ημέρες (εξαιρούνται ΣΚ + αργίες)")
+        else:
+            _stage = st.session_state.setdefault("pl_staged_days", [])
+            _sc1, _sc2 = st.columns([2, 1])
+            with _sc1:
+                _new_day = st.date_input("Πρόσθεσε ημέρα", value=_pl_today, key="pl_single")
+            with _sc2:
+                st.write("")
+                st.write("")
+                if st.button("➕ Πρόσθεσε", key="pl_add_day"):
+                    _iso = _new_day.isoformat()
+                    if _iso not in _stage:
+                        _stage.append(_iso)
+                        _stage.sort()
+            if _stage:
+                st.caption("Επιλεγμένες ημέρες: " + ", ".join(
+                    format_greek_date(d) for d in _stage
+                ))
+                if st.button("🗑️ Καθαρισμός ημερών", key="pl_clear_days"):
+                    st.session_state["pl_staged_days"] = []
+                    st.rerun()
+            _selected_days = [pd.to_datetime(d).normalize() for d in _stage]
+
+        _sel_status = st.selectbox("Κατάσταση", options=["εγκρίθηκε", "εκκρεμεί"], key="pl_status")
+
+        # ── Έλεγχος υπολοίπου (μόνο για κανονική άδεια) ────────────────
+        if _is_annual and _selected_days:
+            _req = len(_selected_days)
+            _avail = None
+            if _pl_leaves is not None:
+                _lrow = _pl_leaves[_pl_leaves["ΑΦΜ"].astype(str) == str(_sel_afm)]
+                if not _lrow.empty:
+                    _lrow = _lrow.iloc[0]
+                    if _sel_leave_year == _pl_today.year:
+                        _avail = int(_lrow.get("Υπόλοιπο Τρέχοντος Έτους Μετά", 0))
+                    elif _sel_leave_year == _pl_today.year - 1:
+                        _avail = int(_lrow.get("Υπόλοιπο Προηγούμενου Έτους Μετά", 0))
+            if _avail is not None:
+                # Αφαίρεσε ήδη προγραμματισμένες κανονικές άδειες ίδιου έτους
+                _already = _pl_df[
+                    (_pl_df["ΑΦΜ"].astype(str) == str(_sel_afm)) &
+                    (_pl_df["Τύπος Απουσίας"] == "Κανονική άδεια") &
+                    (_pl_df["Έτος Άδειας"] == _sel_leave_year)
+                ]
+                _net_avail = _avail - len(_already)
+                if _req > _net_avail:
+                    st.error(f"⚠️ Ζητούνται **{_req}** ημέρες αλλά διαθέσιμο υπόλοιπο **{_net_avail}** "
+                             f"(υπόλοιπο {_avail} − {len(_already)} ήδη προγραμματισμένες).")
+                else:
+                    st.success(f"✅ Διαθέσιμο υπόλοιπο: {_net_avail} ημέρες (ζητούνται {_req}).")
+            else:
+                st.info("ℹ️ Δεν υπάρχουν δεδομένα υπολοίπου — τρέξε πρώτα την καρτέλα Υπόλοιπα για έλεγχο.")
+
+        # ── Κουμπί καταχώρησης ─────────────────────────────────────────
+        if st.button("💾 Καταχώρηση άδειας", type="primary", disabled=not _selected_days):
+            try:
+                _new_rows = []
+                for _d in _selected_days:
+                    _new_rows.append({
+                        "ΑΑ Παραρτηματος": _sel_emp_row["ΑΑ Παραρτηματος"],
+                        "ΑΦΜ": str(_sel_afm),
+                        "Επώνυμο": _sel_emp_row["Επώνυμο"],
+                        "Όνομα": _sel_emp_row["Όνομα"],
+                        "Ημ/νία": pd.to_datetime(_d).normalize(),
+                        "Τύπος Απουσίας": _sel_type,
+                        "Έτος Άδειας": int(_sel_leave_year) if _is_annual else pd.NA,
+                        "Κατάσταση": _sel_status,
+                        "Καταχωρήθηκε": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    })
+                _new_df = pd.DataFrame(_new_rows)
+                _merged = pd.concat([_pl_df, _new_df], ignore_index=True)
+                # Νέα δήλωση υπερισχύει σε διπλότυπα (ΑΦΜ + Ημ/νία)
+                _merged = _merged.drop_duplicates(subset=["ΑΦΜ", "Ημ/νία"], keep="last").reset_index(drop=True)
+                save_planned_df(_merged)
+                st.session_state["pl_staged_days"] = []
+                st.success(f"✅ Καταχωρήθηκαν {len(_new_rows)} ημέρες για {_sel_emp_row['Επώνυμο']} {_sel_emp_row['Όνομα']}.")
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Σφάλμα καταχώρησης: {_e}")
+
+        st.divider()
+
+        # ── Επερχόμενες άδειες + κάλυψη ────────────────────────────────
+        st.markdown("### 👥 Ποιοι λείπουν")
+        _pl_df = load_planned_df()  # φρέσκο μετά από πιθανή αποθήκευση
+
+        if _pl_df.empty:
+            st.info("Δεν υπάρχουν προγραμματισμένες άδειες ακόμα.")
+        else:
+            _view = _pl_df.copy()
+            _view["Ημ/νία"] = pd.to_datetime(_view["Ημ/νία"], errors="coerce")
+
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                _range_from = st.date_input("Προβολή από", value=_pl_today, key="pl_view_from")
+            with _fc2:
+                _range_to = st.date_input("Προβολή έως", value=_pl_today + datetime.timedelta(days=30), key="pl_view_to")
+
+            _mask = (
+                (_view["Ημ/νία"].dt.date >= _range_from) &
+                (_view["Ημ/νία"].dt.date <= _range_to)
+            )
+            _period = _view[_mask].sort_values(["Ημ/νία", "ΑΑ Παραρτηματος", "Επώνυμο"])
+
+            if _period.empty:
+                st.caption("Καμία άδεια στο επιλεγμένο διάστημα.")
+            else:
+                # Προειδοποίηση επικάλυψης ανά ημέρα/υποκατάστημα
+                _overlap = (
+                    _period.groupby([_period["Ημ/νία"].dt.date, "ΑΑ Παραρτηματος"])
+                    .size().reset_index(name="Πλήθος")
+                )
+                _hot = _overlap[_overlap["Πλήθος"] >= 3]
+                if not _hot.empty:
+                    _msgs = []
+                    for _, _h in _hot.iterrows():
+                        _br = _h["ΑΑ Παραρτηματος"]
+                        _br_s = f"Υποκ. {int(_br)}" if pd.notna(_br) else "—"
+                        _msgs.append(f"{format_greek_date(_h.iloc[0])} · {_br_s}: {int(_h['Πλήθος'])} άτομα")
+                    st.warning("⚠️ Ημέρες με πολλές ταυτόχρονες απουσίες:\n\n" + "\n\n".join(f"- {m}" for m in _msgs))
+
+                # Λίστα ανά ημέρα
+                for _day, _grp in _period.groupby(_period["Ημ/νία"].dt.date):
+                    _names = []
+                    for _, _r in _grp.iterrows():
+                        _br = _r["ΑΑ Παραρτηματος"]
+                        _br_s = f"[Υποκ. {int(_br)}] " if pd.notna(_br) else ""
+                        _icon = LEAVE_TYPE_ICON.get(_r["Τύπος Απουσίας"], "📌")
+                        _st_s = "" if _r["Κατάσταση"] == "εγκρίθηκε" else " *(εκκρεμεί)*"
+                        _names.append(f"- {_br_s}{_r['Επώνυμο']} {_r['Όνομα']} · {_icon} {_r['Τύπος Απουσίας']}{_st_s}")
+                    with st.expander(f"📅 {format_greek_date(_day)} — {len(_grp)} άτομα"):
+                        st.markdown("\n".join(_names))
+
+            st.divider()
+
+            # ── Διαγραφή δηλώσεων ──────────────────────────────────────
+            st.markdown("### 🗑️ Διαγραφή δηλώσεων")
+            _del_view = _pl_df.copy()
+            _del_view["Ημ/νία"] = pd.to_datetime(_del_view["Ημ/νία"], errors="coerce")
+            _del_view = _del_view.sort_values(["ΑΑ Παραρτηματος", "Επώνυμο", "Ημ/νία"])
+            _del_opts = {}
+            for _idx, _r in _del_view.iterrows():
+                _key = f"{_r['Επώνυμο']} {_r['Όνομα']} · {format_greek_date(_r['Ημ/νία'])} · {_r['Τύπος Απουσίας']}"
+                _del_opts[_key] = (str(_r["ΑΦΜ"]), pd.to_datetime(_r["Ημ/νία"]).normalize())
+            _to_delete = st.multiselect("Επίλεξε δηλώσεις προς διαγραφή", options=list(_del_opts.keys()), key="pl_del")
+            if _to_delete and st.button("🗑️ Διαγραφή επιλεγμένων", key="pl_del_btn"):
+                _del_keys = {_del_opts[k] for k in _to_delete}
+                _kept = _pl_df[~_pl_df.apply(
+                    lambda r: (str(r["ΑΦΜ"]), pd.to_datetime(r["Ημ/νία"]).normalize()) in _del_keys, axis=1
+                )].reset_index(drop=True)
+                save_planned_df(_kept)
+                st.success(f"✅ Διαγράφηκαν {len(_to_delete)} δηλώσεις.")
+                st.rerun()
+
+            # Λήψη όλων σε Excel
+            st.download_button(
+                "⬇ Λήψη όλων των προγραμματισμένων (Excel)",
+                data=excel_bytes({"Προγραμματισμένες": _pl_df}),
+                file_name="planned_leaves.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="pl_download",
+            )
 
 
 # =========================

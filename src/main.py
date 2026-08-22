@@ -471,6 +471,65 @@ def get_holidays(year: int):
     }
 
 
+def working_days_in_range(start, end) -> list:
+    """Επιστρέφει λίστα εργάσιμων ημερών (Δευτ–Παρ, εκτός αργιών) στο εύρος [start, end]."""
+    start = pd.to_datetime(start).normalize()
+    end = pd.to_datetime(end).normalize()
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return []
+    hol = set()
+    for y in range(start.year, end.year + 1):
+        hol |= get_holidays(y)
+    days = pd.date_range(start, end, freq="D").normalize()
+    return [d for d in days if d.weekday() < 5 and d not in hol]
+
+
+# =========================
+# PLANNED LEAVES (Προγραμματισμένες Άδειες)
+# =========================
+
+PLANNED_LEAVES_COLUMNS = [
+    "ΑΑ Παραρτηματος",
+    "ΑΦΜ",
+    "Επώνυμο",
+    "Όνομα",
+    "Ημ/νία",
+    "Τύπος Απουσίας",
+    "Έτος Άδειας",
+    "Κατάσταση",
+    "Καταχωρήθηκε",
+]
+
+
+def load_planned_leaves(file_path: Path) -> pd.DataFrame:
+    """Φορτώνει το planned_leaves.xlsx (μία γραμμή ανά εργάσιμη ημέρα).
+    Επιστρέφει κενό DataFrame με σωστές στήλες αν δεν υπάρχει το αρχείο."""
+    if not file_path.exists():
+        return pd.DataFrame(columns=PLANNED_LEAVES_COLUMNS)
+
+    df = pd.read_excel(file_path, dtype={"ΑΦΜ": str})
+    df.columns = [str(c).strip() for c in df.columns]
+
+    for col in PLANNED_LEAVES_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    df["ΑΑ Παραρτηματος"] = pd.to_numeric(df["ΑΑ Παραρτηματος"], errors="coerce")
+    df["ΑΦΜ"] = safe_str_series(df["ΑΦΜ"])
+    df["Επώνυμο"] = safe_str_series(df["Επώνυμο"])
+    df["Όνομα"] = safe_str_series(df["Όνομα"])
+    df["Ημ/νία"] = pd.to_datetime(df["Ημ/νία"], dayfirst=True, errors="coerce").dt.normalize()
+    df["Τύπος Απουσίας"] = df["Τύπος Απουσίας"].fillna("").astype(str).str.strip()
+    df["Έτος Άδειας"] = pd.to_numeric(df["Έτος Άδειας"], errors="coerce")
+    df["Κατάσταση"] = df["Κατάσταση"].fillna("").astype(str).str.strip()
+
+    df = df.dropna(subset=["ΑΦΜ", "Ημ/νία"]).copy()
+    df = df[df["Τύπος Απουσίας"] != ""]
+    return df[PLANNED_LEAVES_COLUMNS].drop_duplicates(
+        subset=["ΑΦΜ", "Ημ/νία"]
+    ).reset_index(drop=True)
+
+
 def find_absences(
     df: pd.DataFrame,
     employees: pd.DataFrame,
@@ -528,11 +587,17 @@ def find_absences(
     return result
 
 
-def build_classified_template_excel_bytes(absences: pd.DataFrame) -> bytes:
+def build_classified_template_excel_bytes(
+    absences: pd.DataFrame,
+    prefill: pd.DataFrame = None,
+) -> bytes:
     """
     Δημιουργεί Excel με 2 φύλλα:
       Φύλλο 1 «Absences»  : template με dropdown για Τύπος Απουσίας
       Φύλλο 2 «Κωδικοί»   : πίνακας κωδικών Εργάνης (Κωδικός | Περιγραφή)
+
+    Αν δοθεί `prefill` (στήλες ΑΦΜ, Ημ/νία, Τύπος Απουσίας, Έτος Άδειας),
+    οι αντίστοιχες γραμμές προσυμπληρώνονται αυτόματα (από προγραμματισμένες άδειες).
     """
     import io
     from openpyxl import Workbook
@@ -572,6 +637,31 @@ def build_classified_template_excel_bytes(absences: pd.DataFrame) -> bytes:
     template["Τύπος Απουσίας"] = ""
     template["Έτος Άδειας"] = ""
     template["ΑΦΜ"] = template["ΑΦΜ"].astype(str)
+
+    # Auto-fill από προγραμματισμένες άδειες (match σε ΑΦΜ + Ημ/νία)
+    if prefill is not None and not prefill.empty:
+        # Εξασφάλισε object dtype ώστε να δεχτεί mixed τιμές (string/int)
+        template["Τύπος Απουσίας"] = template["Τύπος Απουσίας"].astype(object)
+        template["Έτος Άδειας"] = template["Έτος Άδειας"].astype(object)
+        pf = prefill.copy()
+        pf["ΑΦΜ"] = pf["ΑΦΜ"].astype(str).str.strip()
+        pf["Ημ/νία"] = pd.to_datetime(pf["Ημ/νία"], errors="coerce").dt.normalize()
+        pf_map_type = {
+            (a, d): t for a, d, t in
+            zip(pf["ΑΦΜ"], pf["Ημ/νία"], pf["Τύπος Απουσίας"])
+        }
+        pf_map_year = {
+            (a, d): y for a, d, y in
+            zip(pf["ΑΦΜ"], pf["Ημ/νία"], pf.get("Έτος Άδειας", pd.Series([None] * len(pf))))
+        }
+        _tdates = pd.to_datetime(template["Ημ/νία"], errors="coerce").dt.normalize()
+        for _i, (_afm, _d) in enumerate(zip(template["ΑΦΜ"].astype(str), _tdates)):
+            _key = (_afm.strip(), _d)
+            if _key in pf_map_type:
+                template.iat[_i, template.columns.get_loc("Τύπος Απουσίας")] = pf_map_type[_key]
+                _yr = pf_map_year.get(_key)
+                if pd.notna(_yr):
+                    template.iat[_i, template.columns.get_loc("Έτος Άδειας")] = int(_yr)
 
     cols = list(template.columns)
     # Header
