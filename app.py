@@ -1833,3 +1833,80 @@ with tab_balances:
                 _shown_dep = _render_detail(_dep_rows)
                 if _shown_dep == 0:
                     st.caption("Οι αποχωρούντες δεν έχουν καταγεγραμμένες απουσίες για το επιλεγμένο φίλτρο.")
+
+        # ── Τέλος έτους: μεταφορά υπολοίπων στο επόμενο έτος ────────────
+        st.divider()
+        _next_year = int(leaves_year) + 1 if leaves_year else _bal_today.year + 1
+        with st.expander(f"🔄 Τέλος έτους — Δημιουργία employees.xlsx για το {_next_year}"):
+            st.caption(
+                f"Υπολογίζει αυτόματα το νέο αρχείο εργαζομένων για το **{_next_year}**: "
+                "το υπόλοιπο του τρέχοντος έτους μεταφέρεται ως «Υπόλοιπο Προηγούμενου Έτους» "
+                "(λήγει τέλος Μαρτίου). Μπορείς να διορθώσεις τη «Δικαιούμενη Τρέχοντος» πριν τη λήψη."
+            )
+
+            _cy_src = leaves_active.copy()  # μόνο ενεργοί (οι αποχωρούντες δεν μεταφέρονται)
+            if _cy_src.empty:
+                st.info("Δεν υπάρχουν ενεργοί εργαζόμενοι για μεταφορά.")
+            else:
+                _new_emp = pd.DataFrame({
+                    "ΑΑ Παραρτηματος": _cy_src["ΑΑ Παραρτηματος"],
+                    "ΑΦΜ": _cy_src["ΑΦΜ"].astype(str),
+                    "Επώνυμο": _cy_src["Επώνυμο"],
+                    "Όνομα": _cy_src["Όνομα"],
+                    "Ημερομηνία Πρόσληψης": _cy_src["Ημερομηνία Πρόσληψης"],
+                    "Ημερομηνία Αποχώρησης": _cy_src.get("Ημερομηνία Αποχώρησης", ""),
+                    "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους":
+                        pd.to_numeric(_cy_src["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"], errors="coerce").fillna(0).astype(int),
+                    "Υπόλοιπο Προηγούμενου Έτους":
+                        pd.to_numeric(_cy_src["Υπόλοιπο Τρέχοντος Έτους Μετά"], errors="coerce").fillna(0).astype(int),
+                    "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους":
+                        pd.to_numeric(_cy_src["Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"], errors="coerce").fillna(0).astype(int),
+                }).sort_values(["ΑΑ Παραρτηματος", "Επώνυμο", "Όνομα"]).reset_index(drop=True)
+
+                st.markdown("**Προεπισκόπηση — μπορείς να διορθώσεις τη «Δικαιούμενη Τρέχοντος»:**")
+                _edited = st.data_editor(
+                    _new_emp,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=[c for c in _new_emp.columns if c != "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους"],
+                    column_config={
+                        "ΑΦΜ": st.column_config.TextColumn("ΑΦΜ"),
+                        "Δικαιούμενη Κανονική Άδεια Προηγούμενου Έτους":
+                            st.column_config.NumberColumn("Δικ. Προηγ.", format="%d"),
+                        "Υπόλοιπο Προηγούμενου Έτους":
+                            st.column_config.NumberColumn("Υπόλ. Προηγ. (μεταφορά)", format="%d"),
+                        "Δικαιούμενη Κανονική Άδεια Τρέχοντος Έτους":
+                            st.column_config.NumberColumn(f"Δικ. Τρέχοντος ({_next_year})", format="%d"),
+                    },
+                    key="carryover_editor",
+                )
+
+                _new_emp_bytes = excel_bytes({"employees": _edited})
+                _cc1, _cc2 = st.columns(2)
+                with _cc1:
+                    st.download_button(
+                        f"⬇ Λήψη employees_{_next_year}.xlsx",
+                        data=_new_emp_bytes,
+                        file_name=f"employees_{_next_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="carryover_dl",
+                    )
+                with _cc2:
+                    if st.session_state.get("od_token"):
+                        if st.button(f"☁️ Αποθήκευση στο OneDrive ως employees_{_next_year}.xlsx", key="carryover_save"):
+                            try:
+                                od.upload_file(
+                                    st.session_state["od_token"],
+                                    f"employees_{_next_year}.xlsx",
+                                    _new_emp_bytes,
+                                    subfolder="config",
+                                )
+                                st.success(f"✅ Αποθηκεύτηκε ως employees_{_next_year}.xlsx στο OneDrive (config).")
+                            except Exception as _e:
+                                st.error(f"Σφάλμα: {_e}")
+
+                st.info(
+                    f"ℹ️ Όταν ξεκινήσει το {_next_year}, μετονόμασε το `employees_{_next_year}.xlsx` "
+                    "σε `employees.xlsx` (από την καρτέλα Ιστορικό → employees) για να γίνει το ενεργό αρχείο. "
+                    "Έτσι δεν επηρεάζεται το τρέχον έτος μέχρι να είσαι έτοιμος."
+                )
