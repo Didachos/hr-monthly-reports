@@ -498,6 +498,8 @@ PLANNED_LEAVES_COLUMNS = [
     "Έτος Άδειας",
     "Κατάσταση",
     "Καταχωρήθηκε",
+    "Εγκρίθηκε από",
+    "Ημ. Έγκρισης",
 ]
 
 
@@ -522,6 +524,8 @@ def load_planned_leaves(file_path: Path) -> pd.DataFrame:
     df["Τύπος Απουσίας"] = df["Τύπος Απουσίας"].fillna("").astype(str).str.strip()
     df["Έτος Άδειας"] = pd.to_numeric(df["Έτος Άδειας"], errors="coerce")
     df["Κατάσταση"] = df["Κατάσταση"].fillna("").astype(str).str.strip()
+    df["Εγκρίθηκε από"] = df["Εγκρίθηκε από"].fillna("").astype(str).str.strip()
+    df["Ημ. Έγκρισης"] = df["Ημ. Έγκρισης"].fillna("").astype(str).str.strip()
 
     df = df.dropna(subset=["ΑΦΜ", "Ημ/νία"]).copy()
     df = df[df["Τύπος Απουσίας"] != ""]

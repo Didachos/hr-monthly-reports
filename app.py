@@ -925,6 +925,12 @@ with tab_planned:
     _pl_leaves = st.session_state.get("leaves")  # για έλεγχο υπολοίπου (αν υπάρχει)
     _pl_today = datetime.date.today()
 
+    st.text_input(
+        "Όνομα εγκρίνοντος (καταγράφεται στις εγκρίσεις)",
+        key="pl_approver",
+        placeholder="π.χ. Χ. Διδάχος",
+    )
+
     if _pl_employees is None or _pl_employees.empty:
         st.warning("⚠️ Δεν βρέθηκε το employees.xlsx. Σύνδεσε OneDrive ή ανέβασέ το από την καρτέλα Εκτέλεση.")
     else:
@@ -1035,6 +1041,8 @@ with tab_planned:
             # ── Κουμπί καταχώρησης ─────────────────────────────────────────
             if st.button("💾 Καταχώρηση άδειας", type="primary", disabled=not _selected_days):
                 try:
+                    _now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                    _approver = st.session_state.get("pl_approver", "").strip()
                     _new_rows = []
                     for _d in _selected_days:
                         _new_rows.append({
@@ -1046,7 +1054,9 @@ with tab_planned:
                             "Τύπος Απουσίας": _sel_type,
                             "Έτος Άδειας": int(_sel_leave_year) if _is_annual else pd.NA,
                             "Κατάσταση": _sel_status,
-                            "Καταχωρήθηκε": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "Καταχωρήθηκε": _now_str,
+                            "Εγκρίθηκε από": _approver if _sel_status == "εγκρίθηκε" else "",
+                            "Ημ. Έγκρισης": _now_str if _sel_status == "εγκρίθηκε" else "",
                         })
                     _new_df = pd.DataFrame(_new_rows)
                     _merged = pd.concat([_pl_df, _new_df], ignore_index=True)
@@ -1058,6 +1068,55 @@ with tab_planned:
                     st.rerun()
                 except Exception as _e:
                     st.error(f"Σφάλμα καταχώρησης: {_e}")
+
+        st.divider()
+
+        # ── Εγκρίσεις εκκρεμών δηλώσεων ─────────────────────────────────
+        st.markdown("### ✅ Εγκρίσεις")
+        _appr_df = load_planned_df()
+        _pending = (_appr_df[_appr_df["Κατάσταση"] == "εκκρεμεί"].copy()
+                    if not _appr_df.empty else pd.DataFrame())
+        if _pending.empty:
+            st.caption("Δεν υπάρχουν εκκρεμείς δηλώσεις προς έγκριση.")
+        else:
+            _pending["Ημ/νία"] = pd.to_datetime(_pending["Ημ/νία"], errors="coerce")
+            _grp = (
+                _pending.groupby(["ΑΦΜ", "Επώνυμο", "Όνομα", "Τύπος Απουσίας"])
+                .agg(_from=("Ημ/νία", "min"), _to=("Ημ/νία", "max"), _n=("Ημ/νία", "size"))
+                .reset_index()
+                .sort_values(["Επώνυμο", "Όνομα"])
+            )
+            for _i, _r in _grp.iterrows():
+                _rng = (format_greek_date(_r["_from"]) if _r["_n"] == 1
+                        else f"{format_greek_date(_r['_from'])} → {format_greek_date(_r['_to'])}")
+                _ac1, _ac2, _ac3 = st.columns([5, 1, 1])
+                with _ac1:
+                    _icon = LEAVE_TYPE_ICON.get(_r["Τύπος Απουσίας"], "📌")
+                    st.markdown(f"{_icon} **{_r['Επώνυμο']} {_r['Όνομα']}** · {_r['Τύπος Απουσίας']} · "
+                                f"{_rng} ({int(_r['_n'])} ημ.)")
+                _mask = (
+                    (_appr_df["ΑΦΜ"].astype(str) == str(_r["ΑΦΜ"])) &
+                    (_appr_df["Τύπος Απουσίας"] == _r["Τύπος Απουσίας"]) &
+                    (_appr_df["Κατάσταση"] == "εκκρεμεί")
+                )
+                with _ac2:
+                    if st.button("✅ Έγκριση", key=f"appr_ok_{_i}"):
+                        _approver = st.session_state.get("pl_approver", "").strip()
+                        if not _approver:
+                            st.warning("Συμπλήρωσε πρώτα το «Όνομα εγκρίνοντος» στην κορυφή.")
+                        else:
+                            _appr_df.loc[_mask, "Κατάσταση"] = "εγκρίθηκε"
+                            _appr_df.loc[_mask, "Εγκρίθηκε από"] = _approver
+                            _appr_df.loc[_mask, "Ημ. Έγκρισης"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                            save_planned_df(_appr_df)
+                            st.success(f"✅ Εγκρίθηκε: {_r['Επώνυμο']} {_r['Όνομα']}")
+                            st.rerun()
+                with _ac3:
+                    if st.button("🗑️ Απόρριψη", key=f"appr_no_{_i}"):
+                        _kept = _appr_df[~_mask].reset_index(drop=True)
+                        save_planned_df(_kept)
+                        st.success(f"🗑️ Απορρίφθηκε: {_r['Επώνυμο']} {_r['Όνομα']}")
+                        st.rerun()
 
         st.divider()
 
