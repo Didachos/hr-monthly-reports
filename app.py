@@ -1890,8 +1890,46 @@ with tab_balances:
     if leaves_df is None:
         st.info("Δεν υπάρχουν δεδομένα. Τρέξε πρώτα μια εκτέλεση.")
     else:
-        # ── Διαχωρισμός ενεργών / αποχωρούντων (βάσει Ημερομηνίας Αποχώρησης) ──
         _bal_today = datetime.date.today()
+
+        # ── Συμφιλίωση με το ΤΡΕΧΟΝ employees.xlsx ─────────────────────
+        # (τα leaves_df μπορεί να προέρχονται από παλιό snapshot/session — ενημέρωσε
+        #  ημερομηνίες αποχώρησης και πρόσθεσε νέους υπαλλήλους που λείπουν)
+        _cur_emp = get_employees_df()
+        if _cur_emp is not None and not _cur_emp.empty:
+            _cur_emp = _cur_emp.copy()
+            _cur_emp["ΑΦΜ"] = _cur_emp["ΑΦΜ"].astype(str)
+            leaves_df = leaves_df.copy()
+            leaves_df["ΑΦΜ"] = leaves_df["ΑΦΜ"].astype(str)
+
+            # (α) Πρόσθεσε υπαλλήλους που υπάρχουν στο τρέχον employees.xlsx
+            #     αλλά λείπουν από τα leaves_df (π.χ. νέες προσλήψεις) — με μηδενική χρήση
+            _missing_afms = set(_cur_emp["ΑΦΜ"]) - set(leaves_df["ΑΦΜ"])
+            if _missing_afms:
+                try:
+                    _add = build_leave_summary(
+                        pd.DataFrame(),
+                        _cur_emp[_cur_emp["ΑΦΜ"].isin(_missing_afms)],
+                        int(leaves_year) if leaves_year else _bal_today.year,
+                        int(leaves_month) if leaves_month else 12,
+                    )
+                    _add["ΑΦΜ"] = _add["ΑΦΜ"].astype(str)
+                    leaves_df = pd.concat([leaves_df, _add], ignore_index=True)
+                except Exception:
+                    pass
+
+            # (β) Ενημέρωσε την Ημερομηνία Αποχώρησης από το τρέχον employees.xlsx
+            _dep_map = {}
+            for _, _e in _cur_emp.iterrows():
+                _d = _e.get("Ημερομηνία Αποχώρησης")
+                _dep_map[str(_e["ΑΦΜ"])] = "" if pd.isna(_d) else pd.to_datetime(_d).strftime("%d/%m/%Y")
+            leaves_df["Ημερομηνία Αποχώρησης"] = (
+                leaves_df["ΑΦΜ"].map(_dep_map).fillna(
+                    leaves_df.get("Ημερομηνία Αποχώρησης", pd.Series("", index=leaves_df.index))
+                )
+            )
+
+        # ── Διαχωρισμός ενεργών / αποχωρούντων (βάσει Ημερομηνίας Αποχώρησης) ──
         if "Ημερομηνία Αποχώρησης" in leaves_df.columns:
             _dep_dates = pd.to_datetime(
                 leaves_df["Ημερομηνία Αποχώρησης"], dayfirst=True, errors="coerce"
